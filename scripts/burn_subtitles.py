@@ -19,7 +19,7 @@ import tempfile
 import textwrap
 from pathlib import Path
 
-from user_config import env_value, load_user_config
+from user_config import env_value, load_user_config, resolve_progress_enabled
 
 _DISPLAY_REPLACEMENTS: list[tuple[re.Pattern, str]] = []
 _SUBTITLE_BOX_MAX_WIDTH_RATIO = 0.86
@@ -612,6 +612,13 @@ def _rounded_rect_path(width: int, height: int, radius: int) -> str:
     )
 
 
+def _rect_path(width: int, height: int) -> str:
+    """Return a simple ASS vector rectangle without anti-aliased seams."""
+    width = max(1, int(width))
+    height = max(1, int(height))
+    return f"m 0 0 l {width} 0 l {width} {height} l 0 {height}"
+
+
 def _subtitle_box_geometry(text: str, font_size: int, video_width: int, video_height: int, margin_v: int) -> tuple[int, int, int, int]:
     """Estimate the rounded backing box around a bottom-centered subtitle."""
     lines = [line for line in text.split("\n") if line.strip()] or [text]
@@ -630,9 +637,11 @@ def _ass_escape(text: str) -> str:
     return text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
 
 
-def load_progress_chapters(path: Path | None, duration: float) -> list[dict]:
+def load_progress_chapters(
+    path: Path | None, duration: float, *, enabled: bool = True
+) -> list[dict]:
     """Load broad progress chapters; videos at or below three minutes stay bar-free."""
-    if path is None:
+    if not enabled or path is None:
         return []
     payload = json.loads(path.read_text(encoding="utf-8"))
     threshold = float(payload.get("min_progress_duration", 180.0))
@@ -655,42 +664,51 @@ def load_progress_chapters(path: Path | None, duration: float) -> list[dict]:
     return chapters
 
 
+def _progress_overlay_metrics(content_height: int) -> tuple[int, int]:
+    """Return the bottom-overlay height and readable label size."""
+    progress_height = max(54, int(round(content_height * 0.075)))
+    if progress_height % 2:
+        progress_height += 1
+    progress_font = max(18, int(progress_height * 0.28))
+    return progress_height, progress_font
+
+
 def _progress_events(
-    chapters: list[dict], video_width: int, video_height: int, duration: float
+    chapters: list[dict], video_width: int, content_height: int, duration: float
 ) -> tuple[list[str], int, int]:
     if not chapters:
         return [], 0, 12
-    progress_height = max(22, int(video_height * 0.021))
-    progress_font = max(12, int(progress_height * 0.58))
-    y = video_height - progress_height
-    events = [
-        f"Dialogue: 0,{seconds_to_ass_time(0)},{seconds_to_ass_time(duration)},CaptionBox,,0,0,0,,"
-        f"{{\\an7\\pos(0,{y})\\p1\\1c&H3E3E40&\\1a&H58&\\bord0\\shad0}}"
-        f"{_rounded_rect_path(video_width, progress_height, 1)}"
-    ]
+    progress_height, progress_font = _progress_overlay_metrics(content_height)
+    progress_line_height = max(3, int(round(content_height * 0.003)))
+    y = content_height - progress_height
+    line_y = content_height - progress_line_height
+    events = []
     for tick in range(int(math.ceil(duration))):
         start = float(tick)
         end = min(duration, tick + 1.0)
         fill_width = max(1, int(video_width * end / duration))
         events.append(
-            f"Dialogue: 1,{seconds_to_ass_time(start)},{seconds_to_ass_time(end)},CaptionBox,,0,0,0,,"
-            f"{{\\an7\\pos(0,{y})\\p1\\1c&HBBBBBB&\\1a&H70&\\bord0\\shad0}}"
-            f"{_rounded_rect_path(fill_width, progress_height, 1)}"
+            f"Dialogue: 1,{seconds_to_ass_time(start)},{seconds_to_ass_time(end)},CaptionBox,ProgressFill,0,0,0,,"
+            f"{{\\an7\\pos(0,{line_y})\\p1\\1c&HFFFFFF&\\1a&H00&\\bord0\\shad0}}"
+            f"{_rect_path(fill_width, progress_line_height)}"
         )
-    separator_width = max(1, int(video_width * 0.0007))
+    separator_width = max(2, int(video_width * 0.001))
+    marker_y = y + int(progress_height * 0.34)
+    marker_height = max(1, line_y - marker_y)
     for chapter in chapters[1:]:
         x = int(video_width * float(chapter["start"]) / duration)
         events.append(
-            f"Dialogue: 2,{seconds_to_ass_time(0)},{seconds_to_ass_time(duration)},CaptionBox,,0,0,0,,"
-            f"{{\\an7\\pos({x},{y})\\p1\\1c&HFFFFFF&\\1a&H58&\\bord0\\shad0}}"
-            f"{_rounded_rect_path(separator_width, progress_height, 1)}"
+            f"Dialogue: 2,{seconds_to_ass_time(0)},{seconds_to_ass_time(duration)},CaptionBox,ProgressMarker,0,0,0,,"
+            f"{{\\an7\\pos({x},{marker_y})\\p1\\1c&HFFFFFF&\\1a&H90&\\bord0\\shad0}}"
+            f"{_rect_path(separator_width, marker_height)}"
         )
     for chapter in chapters:
         center = (float(chapter["start"]) + float(chapter["end"])) / 2
         x = int(video_width * center / duration)
         events.append(
             f"Dialogue: 3,{seconds_to_ass_time(0)},{seconds_to_ass_time(duration)},"
-            f"ProgressLabel,,0,0,0,,{{\\an5\\pos({x},{y + progress_height // 2})}}"
+            f"ProgressLabel,,0,0,0,,"
+            f"{{\\an5\\pos({x},{y + int(progress_height * 0.68)})}}"
             f"{_ass_escape(str(chapter['title']))}"
         )
     return events, progress_height, progress_font
@@ -708,21 +726,26 @@ def generate_ass(lines: list[dict], output_path: Path, video_width: int = 1920,
     progress_events, progress_height, progress_font = _progress_events(
         chapters, video_width, video_height, duration
     )
+    canvas_height = video_height
+    caption_margin_v = margin_v
     if chapters:
-        margin_v = max(margin_v, progress_height + int(video_height * 0.020))
+        caption_margin_v = max(
+            margin_v,
+            progress_height + int(video_height * 0.018),
+        )
 
     ass_header = textwrap.dedent(f"""\
         [Script Info]
         ScriptType: v4.00+
         PlayResX: {video_width}
-        PlayResY: {video_height}
+        PlayResY: {canvas_height}
         WrapStyle: 0
 
         [V4+ Styles]
         Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-        Style: CaptionText,PingFang SC,{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,2,20,20,{margin_v},1
+        Style: CaptionText,PingFang SC,{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,2,20,20,{caption_margin_v},1
         Style: CaptionBox,Arial,10,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
-        Style: ProgressLabel,PingFang SC,{progress_font},&H30FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1
+        Style: ProgressLabel,PingFang SC,{progress_font},&H10FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1
 
         [Events]
         Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -734,7 +757,7 @@ def generate_ass(lines: list[dict], output_path: Path, video_width: int = 1920,
         end = seconds_to_ass_time(line["end"])
         text = line["text"].strip() if preserve_text else _wrap_display_text(line["text"], max_chars)
         box_x, box_y, box_width, box_height = _subtitle_box_geometry(
-            text, font_size, video_width, video_height, margin_v
+            text, font_size, video_width, video_height, caption_margin_v
         )
         radius = int(font_size * 0.24)
         box_path = _rounded_rect_path(box_width, box_height, radius)
@@ -1015,6 +1038,7 @@ def build_beauty_filter_graph(
     brighten_strength: float = _DEFAULT_BRIGHTEN_STRENGTH_PERCENT / 100,
     filter_prefix: list[str] | None = None,
     scale_to: tuple[int, int] | None = None,
+    progress_overlay_height: int = 0,
 ) -> tuple[str, str]:
     """Build one FFmpeg graph for light camera beauty plus subtitles.
 
@@ -1082,8 +1106,67 @@ def build_beauty_filter_graph(
     final_filters = list(filter_prefix or [])
     if scale_to:
         final_filters.append(f"scale={scale_to[0]}:{scale_to[1]}")
-    final_filters.append(ass_filter)
-    graph_parts.append(f"[beautified]{','.join(final_filters)}[video_out]")
+    if progress_overlay_height:
+        graph_parts.append(
+            f"[beautified]{','.join(final_filters) if final_filters else 'null'}"
+            "[prepared]"
+        )
+        _append_progress_gradient(
+            graph_parts,
+            "prepared",
+            ass_filter,
+            progress_overlay_height,
+        )
+    else:
+        final_filters.append(ass_filter)
+        graph_parts.append(f"[beautified]{','.join(final_filters)}[video_out]")
+    return ";".join(graph_parts), "[video_out]"
+
+
+def _append_progress_gradient(
+    graph_parts: list[str],
+    input_label: str,
+    ass_filter: str,
+    progress_overlay_height: int,
+) -> None:
+    """Overlay one continuous RGBA gradient, then render ASS labels above it."""
+    height = max(2, int(progress_overlay_height))
+    graph_parts.extend([
+        f"[{input_label}]split=2[gradient_base][gradient_source]",
+        (
+            f"[gradient_source]crop=iw:{height}:0:ih-{height},format=rgba,"
+            "geq=r='47':g='47':b='49':a='255*0.72*Y/(H-1)'"
+            "[progress_gradient]"
+        ),
+        (
+            "[gradient_base][progress_gradient]"
+            "overlay=0:main_h-overlay_h:format=auto[with_progress]"
+        ),
+        f"[with_progress]{ass_filter}[video_out]",
+    ])
+
+
+def build_progress_filter_graph(
+    ass_filter: str,
+    progress_overlay_height: int,
+    *,
+    filter_prefix: list[str] | None = None,
+    scale_to: tuple[int, int] | None = None,
+) -> tuple[str, str]:
+    """Build the non-beauty graph for a smooth progress gradient and ASS."""
+    graph_parts = []
+    initial_filters = list(filter_prefix or [])
+    if scale_to:
+        initial_filters.append(f"scale={scale_to[0]}:{scale_to[1]}")
+    graph_parts.append(
+        f"[0:v]{','.join(initial_filters) if initial_filters else 'null'}[prepared]"
+    )
+    _append_progress_gradient(
+        graph_parts,
+        "prepared",
+        ass_filter,
+        progress_overlay_height,
+    )
     return ";".join(graph_parts), "[video_out]"
 
 
@@ -1093,7 +1176,8 @@ def burn_subtitles(video_path: Path, ass_path: Path, output_path: Path,
                    total_duration_s: float = 0,
                    encoder: str = "x264",
                    video_size: tuple[int, int] | None = None,
-                   camera_region: tuple[int, int, int, int] | None = None):
+                   camera_region: tuple[int, int, int, int] | None = None,
+                   progress_overlay_height: int = 0):
     """Burn ASS subtitles into video using ffmpeg.
 
     scale_to: (width, height) to scale before rendering subtitles.
@@ -1117,6 +1201,7 @@ def burn_subtitles(video_path: Path, ass_path: Path, output_path: Path,
     vf = ",".join(vf_parts)
 
     beauty_enabled = camera_region is not None
+    progress_enabled = progress_overlay_height > 0
     if beauty_enabled and not video_size:
         raise ValueError("video_size is required when beauty smoothing is enabled")
     if beauty_enabled:
@@ -1127,6 +1212,7 @@ def burn_subtitles(video_path: Path, ass_path: Path, output_path: Path,
             camera_region,
             filter_prefix=filter_prefix,
             scale_to=scale_to,
+            progress_overlay_height=progress_overlay_height,
         )
         x, y, width, height = camera_region
         log(
@@ -1134,6 +1220,15 @@ def burn_subtitles(video_path: Path, ass_path: Path, output_path: Path,
             f"{_DEFAULT_BRIGHTEN_STRENGTH_PERCENT:g}% brightening "
             f"in detected camera region {width}x{height}+{x}+{y}"
         )
+    elif progress_enabled:
+        graph, video_map = build_progress_filter_graph(
+            ass_filter,
+            progress_overlay_height,
+            filter_prefix=filter_prefix,
+            scale_to=scale_to,
+        )
+        log("Continuous translucent progress gradient enabled")
+        log("Beauty smoothing disabled")
     else:
         graph, video_map = "", ""
         log("Beauty smoothing disabled")
@@ -1141,7 +1236,7 @@ def burn_subtitles(video_path: Path, ass_path: Path, output_path: Path,
     if scale_to:
         log(f"Scaling to {scale_to[0]}x{scale_to[1]}")
     if encoder == "videotoolbox":
-        if scale_to or filter_prefix or beauty_enabled:
+        if scale_to or filter_prefix or beauty_enabled or progress_enabled:
             # H264 for filtered square/downscaled output (smaller file)
             video_codec = ["-c:v", "h264_videotoolbox", "-b:v", "8M"]
         else:
@@ -1164,7 +1259,7 @@ def burn_subtitles(video_path: Path, ass_path: Path, output_path: Path,
     progress_path.unlink(missing_ok=True)
 
     cmd = ["ffmpeg", "-i", str(video_path)]
-    if beauty_enabled:
+    if beauty_enabled or progress_enabled:
         cmd.extend([
             "-filter_complex", graph,
             "-map", video_map,
@@ -1225,6 +1320,15 @@ def main():
         default=None,
         help="Optional broad chapter JSON; rendered only when video duration is over three minutes.",
     )
+    parser.add_argument(
+        "--progress",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Enable chapter progress when chapters are available (default: enabled). "
+            "Use --no-progress to hide it for this run."
+        ),
+    )
     parser.add_argument("--max-chars", type=int, default=0,
                         help="Max visual chars per subtitle line. Default 0 = auto (landscape 28, portrait 16).")
     parser.add_argument("--draft-output", default=None, help="Write an SRT draft for review")
@@ -1245,6 +1349,12 @@ def main():
     )
     args = parser.parse_args()
 
+    try:
+        progress_requested = resolve_progress_enabled(args.progress)
+    except RuntimeError as exc:
+        print(f"❌ Invalid progress setting: {exc}")
+        sys.exit(1)
+
     video_path = Path(args.video)
     transcript_path = Path(args.transcript) if args.transcript else None
     srt_input_path = Path(args.srt_input) if args.srt_input else None
@@ -1262,7 +1372,7 @@ def main():
     if srt_input_path and not srt_input_path.exists():
         print(f"❌ SRT not found: {srt_input_path}")
         sys.exit(1)
-    if chapters_path and not chapters_path.exists():
+    if progress_requested and chapters_path and not chapters_path.exists():
         print(f"❌ Chapters not found: {chapters_path}")
         sys.exit(1)
 
@@ -1379,14 +1489,23 @@ def main():
         lines = normalize_line_timing(lines)
 
     try:
-        chapters = load_progress_chapters(chapters_path, video_duration)
+        chapters = load_progress_chapters(
+            chapters_path, video_duration, enabled=progress_requested
+        )
     except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
         print(f"❌ Invalid chapters: {exc}")
         sys.exit(1)
     log(
         "Progress bar enabled with broad content chapters"
         if chapters
-        else "Progress bar disabled because the video is at most three minutes or has no chapters"
+        else (
+            "Progress bar disabled by user/configuration"
+            if not progress_requested
+            else "Progress bar disabled because the video is at most three minutes or has no chapters"
+        )
+    )
+    progress_overlay_height = (
+        _progress_overlay_metrics(ass_h)[0] if chapters else 0
     )
 
     if args.draft_output:
@@ -1428,7 +1547,8 @@ def main():
                    total_duration_s=video_duration,
                    encoder=args.encoder,
                    video_size=(video_w, video_h),
-                   camera_region=camera_region)
+                   camera_region=camera_region,
+                   progress_overlay_height=progress_overlay_height)
 
     log("")
     log("=" * 50)

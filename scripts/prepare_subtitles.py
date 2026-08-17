@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Prepare Chinese or bilingual subtitles and broad video chapters."""
+"""Prepare Chinese subtitles and broad video chapters."""
 
 from __future__ import annotations
 
 import argparse
-import concurrent.futures
 import hashlib
 import json
 import os
@@ -13,41 +12,18 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from subtitle_api import (
-    DEFAULT_API_BASE,
-    DEFAULT_API_KEY_FILE,
-    extract_json_from_text,
-    post_json,
-)
-from user_config import env_value, load_user_config
+from dashscope_client import call_qwen_json
+from user_config import env_value, load_user_config, resolve_progress_enabled
 
 
-DEFAULT_MODEL = "google/gemini-3.5-flash"
-TRANSLATION_VERSION = 1
-CHAPTER_PLANNING_VERSION = 2
+DEFAULT_MODEL = "qwen-plus"
+CHAPTER_PLANNING_VERSION = 3
 DEFAULT_PROGRESS_MIN_DURATION = 180.0
 DISPLAY_PUNCTUATION = re.compile(r"[，。！？；：、,.!?;:…]+")
-VALID_SUBTITLE_MODES = {"zh", "bilingual"}
 
 
 def fail(message: str) -> None:
     raise SystemExit(f"Error: {message}")
-
-
-def resolve_subtitle_mode(requested: str) -> str:
-    if requested != "auto":
-        return requested
-    env_mode = env_value(
-        "OIL_SUBTITLE_MODE", "SCREEN_STUDIO_EDITOR_SUBTITLE_MODE"
-    )
-    config = load_user_config()
-    subtitle_config = config.get("subtitles") or {}
-    if not isinstance(subtitle_config, dict):
-        fail("subtitles must be a JSON object in the oil-subtitle config")
-    mode = env_mode or str(subtitle_config.get("mode") or "zh").strip()
-    if mode not in VALID_SUBTITLE_MODES:
-        fail("Subtitle mode must be 'zh' or 'bilingual'")
-    return mode
 
 
 def resolve_progress_min_duration(requested: float | None) -> float:
@@ -76,7 +52,7 @@ def resolve_progress_min_duration(requested: float | None) -> float:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Prepare Chinese or bilingual subtitles and broad chapters."
+        description="Prepare Chinese subtitles and broad chapters with Bailian Qwen."
     )
     parser.add_argument("--transcript", type=Path, required=True)
     parser.add_argument("--video", type=Path)
@@ -85,12 +61,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest-output", type=Path)
     parser.add_argument("--work-dir", type=Path, required=True)
     parser.add_argument("--model", default=DEFAULT_MODEL)
-    parser.add_argument("--api-base", default=DEFAULT_API_BASE)
-    parser.add_argument("--api-key", default="")
-    parser.add_argument("--api-key-file", type=Path, default=DEFAULT_API_KEY_FILE)
     parser.add_argument("--timeout", type=int, default=240)
-    parser.add_argument("--batch-size", type=int, default=60)
-    parser.add_argument("--workers", type=int, default=3)
     parser.add_argument(
         "--min-progress-duration",
         type=float,
@@ -101,28 +72,19 @@ def parse_args() -> argparse.Namespace:
             "then 180."
         ),
     )
-    parser.add_argument("--min-chapter-duration", type=float, default=75.0)
-    parser.add_argument("--max-chapters", type=int, default=6)
     parser.add_argument(
-        "--subtitle-mode",
-        choices=["auto", "zh", "bilingual"],
-        default="auto",
+        "--progress",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help=(
-            "Subtitle language mode. auto reads OIL_SUBTITLE_MODE "
-            "or subtitles.mode from user config, then defaults to zh."
+            "Enable chapter generation and progress display (default: enabled). "
+            "Use --no-progress to disable both for this run."
         ),
     )
+    parser.add_argument("--min-chapter-duration", type=float, default=75.0)
+    parser.add_argument("--max-chapters", type=int, default=6)
     parser.add_argument("--resume", action="store_true")
     return parser.parse_args()
-
-
-def api_key_from_args(args: argparse.Namespace) -> str:
-    key = args.api_key or os.environ.get("ZENMUX_API_KEY", "")
-    if not key and args.api_key_file.exists():
-        key = args.api_key_file.read_text(encoding="utf-8").strip()
-    if not key:
-        fail(f"ZenMux key not found in the environment or {args.api_key_file}")
-    return key
 
 
 def load_segments(path: Path) -> list[dict[str, Any]]:
@@ -166,22 +128,6 @@ def video_duration(path: Path | None, segments: list[dict[str, Any]]) -> float:
     return max(float(segment["end"]) for segment in segments)
 
 
-def response_text(response: dict[str, Any]) -> str:
-    choices = response.get("choices") or []
-    if not choices:
-        fail("Model response contains no choices")
-    content = (choices[0].get("message") or {}).get("content")
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return "".join(
-            str(item.get("text") or "")
-            for item in content
-            if isinstance(item, dict)
-        )
-    fail("Model response contains no text")
-
-
 def display_text(text: str) -> str:
     return re.sub(r"\s+", " ", DISPLAY_PUNCTUATION.sub("", text)).strip()
 
@@ -197,139 +143,17 @@ def model_json(
     *,
     prompt: str,
     model: str,
-    api_base: str,
-    api_key: str,
     timeout: int,
     max_tokens: int,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    retry_note = ""
-    for attempt in range(2):
-        request_payload: dict[str, Any] = {
-            "model": model,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "You are a meticulous bilingual subtitle editor Return strict JSON only",
-                },
-                {"role": "user", "content": prompt + retry_note},
-            ],
-            "max_completion_tokens": max_tokens,
-            "response_format": {"type": "json_object"},
-        }
-        if not model.startswith("anthropic/"):
-            request_payload["temperature"] = 0
-        response = post_json(
-            f"{api_base.rstrip('/')}/chat/completions",
-            request_payload,
-            api_key,
-            timeout,
-        )
-        try:
-            return extract_json_from_text(response_text(response)), response.get("usage")
-        except json.JSONDecodeError:
-            if attempt == 1:
-                raise
-            retry_note = (
-                "\nYour previous response was invalid JSON Return only valid JSON "
-                "with double quoted keys and strings and no trailing commas"
-            )
-    raise AssertionError("unreachable")
-
-
-def translation_prompt(rows: list[dict[str, Any]]) -> str:
-    source = "\n".join(f"[{row['id']}] {row['text']}" for row in rows)
-    return f"""
-Translate every TARGET Mandarin subtitle below into concise natural English
-for a bilingual talking-head video The Mandarin line will appear above and
-your English line below it Preserve product names and established spellings
-such as Twitter Vibe Coding Vibe Hub Selector oil-motion Skill AI Agent UI
-Proof of Work MBA and AI Product Builder
-
-Rules
-- Return exactly one translation for every supplied ID in the same order
-- Translate the meaning faithfully without adding explanations
-- Keep each English line compact enough to read during the original timing
-- Do not end lines with commas periods question marks exclamation marks colons
-  semicolons or similar display punctuation
-- If the source is already English preserve it with correct capitalization
-
-Return strict JSON only
-{{"translations":[{{"id":0,"en":"Hello everyone"}}]}}
-
-TARGETS
-{source}
-""".strip()
-
-
-def translate_batch(
-    rows: list[dict[str, Any]],
-    *,
-    args: argparse.Namespace,
-    api_key: str,
-) -> tuple[dict[int, str], dict[str, Any] | None]:
-    batch_signature = signature(
-        {
-            "version": TRANSLATION_VERSION,
-            "model": args.model,
-            "rows": rows,
-        }
+    return call_qwen_json(
+        prompt=prompt,
+        system="你是视频章节编辑，只返回严格 JSON，不要解释",
+        model=model,
+        max_tokens=max_tokens,
+        temperature=0,
+        timeout=timeout,
     )
-    cache_path = args.work_dir / f"translation-{rows[0]['id']:04d}-{rows[-1]['id']:04d}.json"
-    payload: dict[str, Any]
-    usage: dict[str, Any] | None = None
-    if args.resume and cache_path.exists():
-        cached = json.loads(cache_path.read_text(encoding="utf-8"))
-        if cached.get("signature") == batch_signature:
-            payload = cached["payload"]
-        else:
-            payload, usage = model_json(
-                prompt=translation_prompt(rows),
-                model=args.model,
-                api_base=args.api_base,
-                api_key=api_key,
-                timeout=args.timeout,
-                max_tokens=12_000,
-            )
-    else:
-        payload, usage = model_json(
-            prompt=translation_prompt(rows),
-            model=args.model,
-            api_base=args.api_base,
-            api_key=api_key,
-            timeout=args.timeout,
-            max_tokens=12_000,
-        )
-
-    expected = [int(row["id"]) for row in rows]
-    translated: dict[int, str] = {}
-    for item in payload.get("translations") or []:
-        if not isinstance(item, dict):
-            continue
-        try:
-            item_id = int(item.get("id"))
-        except (TypeError, ValueError):
-            continue
-        text = display_text(str(item.get("en") or ""))
-        if item_id in expected and text:
-            translated[item_id] = text
-    if sorted(translated) != expected:
-        missing = sorted(set(expected) - set(translated))
-        fail(f"Translation batch is incomplete missing IDs {missing}")
-
-    cache_path.write_text(
-        json.dumps(
-            {
-                "signature": batch_signature,
-                "payload": payload,
-                "usage": usage,
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    return translated, usage
 
 
 def chapter_prompt(segments: list[dict[str, Any]], duration: float, max_chapters: int) -> str:
@@ -367,9 +191,8 @@ def plan_chapters(
     duration: float,
     *,
     args: argparse.Namespace,
-    api_key: str,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
-    if duration <= args.min_progress_duration:
+    if not args.progress_enabled or duration <= args.min_progress_duration:
         return [], None
     chapter_signature = signature(
         {
@@ -394,8 +217,6 @@ def plan_chapters(
             payload, usage = model_json(
                 prompt=chapter_prompt(segments, duration, args.max_chapters),
                 model=args.model,
-                api_base=args.api_base,
-                api_key=api_key,
                 timeout=args.timeout,
                 max_tokens=2500,
             )
@@ -403,8 +224,6 @@ def plan_chapters(
         payload, usage = model_json(
             prompt=chapter_prompt(segments, duration, args.max_chapters),
             model=args.model,
-            api_base=args.api_base,
-            api_key=api_key,
             timeout=args.timeout,
             max_tokens=2500,
         )
@@ -468,6 +287,10 @@ def plan_chapters(
 
 def main() -> None:
     args = parse_args()
+    try:
+        args.progress_enabled = resolve_progress_enabled(args.progress)
+    except RuntimeError as exc:
+        fail(str(exc))
     args.min_progress_duration = resolve_progress_min_duration(
         args.min_progress_duration
     )
@@ -480,65 +303,27 @@ def main() -> None:
             fail("--manifest-output requires --video")
     segments = load_segments(args.transcript)
     duration = video_duration(args.video, segments)
-    subtitle_mode = resolve_subtitle_mode(args.subtitle_mode)
-    needs_model = subtitle_mode == "bilingual" or duration > args.min_progress_duration
-    api_key = api_key_from_args(args) if needs_model else ""
     usages: list[dict[str, Any]] = []
-    translations: dict[int, str] = {}
-    if subtitle_mode == "bilingual":
-        rows = [
-            {"id": index, "text": str(segment["text"]).strip()}
-            for index, segment in enumerate(segments)
-        ]
-        batches = [
-            rows[index : index + args.batch_size]
-            for index in range(0, len(rows), args.batch_size)
-        ]
-        with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as executor:
-            futures = [
-                executor.submit(translate_batch, batch, args=args, api_key=api_key)
-                for batch in batches
-            ]
-            for future in concurrent.futures.as_completed(futures):
-                translated, usage = future.result()
-                translations.update(translated)
-                if usage:
-                    usages.append(usage)
-        if sorted(translations) != list(range(len(segments))):
-            fail("Final translation set does not match the transcript")
 
     prepared_segments: list[dict[str, Any]] = []
-    for index, segment in enumerate(segments):
+    for segment in segments:
         prepared = {
             "start": float(segment["start"]),
             "end": float(segment["end"]),
+            "text": display_text(str(segment["text"])),
         }
-        if subtitle_mode == "bilingual":
-            prepared.update(
-                {
-                    "zh": display_text(str(segment["text"])),
-                    "en": translations[index],
-                }
-            )
-        else:
-            prepared["text"] = display_text(str(segment["text"]))
         prepared_segments.append(prepared)
-    chapters, chapter_usage = plan_chapters(
-        segments, duration, args=args, api_key=api_key
-    )
+    chapters, chapter_usage = plan_chapters(segments, duration, args=args)
     if chapter_usage:
         usages.append(chapter_usage)
 
     subtitle_payload: dict[str, Any] = {
         "schema_version": 1,
-        "subtitle_mode": subtitle_mode,
+        "subtitle_mode": "zh",
         "duration": round(duration, 3),
         "segments": prepared_segments,
+        "language": "zh",
     }
-    if subtitle_mode == "bilingual":
-        subtitle_payload["language_order"] = ["zh", "en"]
-    else:
-        subtitle_payload["language"] = "zh"
     args.output.write_text(
         json.dumps(subtitle_payload, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -548,6 +333,7 @@ def main() -> None:
             {
                 "schema_version": 1,
                 "enabled": bool(chapters),
+                "progress_requested": args.progress_enabled,
                 "min_progress_duration": args.min_progress_duration,
                 "duration": round(duration, 3),
                 "chapters": chapters,
@@ -563,28 +349,19 @@ def main() -> None:
         video_ref = os.path.relpath(args.video.resolve(), manifest_dir)
         transcript_ref = os.path.relpath(args.output.resolve(), manifest_dir)
         chapters_ref = os.path.relpath(args.chapters_output.resolve(), manifest_dir)
-        language = (
-            {
-                "code": "bilingual",
-                "name": "中英双语",
-                "transcript": transcript_ref,
-                "source": True,
-            }
-            if subtitle_mode == "bilingual"
-            else {
-                "code": "zh",
-                "name": "中文",
-                "transcript": transcript_ref,
-                "source": True,
-            }
-        )
+        language = {
+            "code": "zh",
+            "name": "中文",
+            "transcript": transcript_ref,
+            "source": True,
+        }
         args.manifest_output.write_text(
             json.dumps(
                 {
                     "video": video_ref,
-                    "bilingual": subtitle_mode == "bilingual",
-                    "subtitle_mode": subtitle_mode,
+                    "subtitle_mode": "zh",
                     "duration": round(duration, 3),
+                    "progress_requested": args.progress_enabled,
                     "min_progress_duration": args.min_progress_duration,
                     "languages": [language],
                     "chapters_file": chapters_ref,
@@ -597,7 +374,7 @@ def main() -> None:
             encoding="utf-8",
         )
     report = {
-        "subtitle_mode": subtitle_mode,
+        "subtitle_mode": "zh",
         "segments": len(prepared_segments),
         "duration": round(duration, 3),
         "progress_enabled": bool(chapters),

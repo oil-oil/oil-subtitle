@@ -113,6 +113,29 @@ class ProgressBarTests(unittest.TestCase):
         self.assertIn("开场", labels[0])
         self.assertIn("正文", labels[1])
 
+    def test_progress_bar_is_a_transparent_overlay_inside_the_video(self):
+        chapters = [
+            {"title": "开场", "start": 0.0, "end": 90.0},
+            {"title": "正文", "start": 90.0, "end": 181.0},
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            ass_path = Path(tmp) / "subtitles.ass"
+            BURN_SUBTITLES.generate_ass(
+                [{"start": 0.0, "end": 1.0, "text": "测试字幕"}],
+                ass_path,
+                video_width=1920,
+                video_height=1080,
+                chapters=chapters,
+                duration=181.0,
+            )
+            content = ass_path.read_text(encoding="utf-8")
+
+        self.assertIn("PlayResY: 1080", content)
+        self.assertNotIn("ProgressBand", content)
+        self.assertNotIn("ProgressShadow", content)
+        self.assertIn("Style: ProgressLabel,PingFang SC,22", content)
+        self.assertIn(r"\1c&HFFFFFF&", content)
+
     def test_three_minute_video_does_not_show_progress(self):
         payload = {
             "enabled": True,
@@ -126,6 +149,15 @@ class ProgressBarTests(unittest.TestCase):
             path = Path(tmp) / "chapters.json"
             path.write_text(json.dumps(payload), encoding="utf-8")
             chapters = BURN_SUBTITLES.load_progress_chapters(path, 180.0)
+
+        self.assertEqual(chapters, [])
+
+    def test_progress_can_be_disabled_even_when_chapters_exist(self):
+        chapters = BURN_SUBTITLES.load_progress_chapters(
+            Path("/does/not/need/to/exist.json"),
+            360.0,
+            enabled=False,
+        )
 
         self.assertEqual(chapters, [])
 
@@ -224,6 +256,42 @@ class BeautyFilterTests(unittest.TestCase):
             "ass='/tmp/subtitles.ass'[video_out]",
             graph,
         )
+
+    def test_progress_graph_uses_one_continuous_rgba_gradient(self):
+        graph, output = BURN_SUBTITLES.build_progress_filter_graph(
+            "ass='/tmp/subtitles.ass'",
+            82,
+        )
+
+        self.assertEqual(output, "[video_out]")
+        self.assertIn("crop=iw:82:0:ih-82,format=rgba", graph)
+        self.assertIn(
+            "geq=r='47':g='47':b='49':a='255*0.72*Y/(H-1)'",
+            graph,
+        )
+        self.assertIn(
+            "overlay=0:main_h-overlay_h:format=auto[with_progress]",
+            graph,
+        )
+        self.assertTrue(graph.endswith("ass='/tmp/subtitles.ass'[video_out]"))
+
+    def test_beauty_graph_adds_gradient_after_crop_and_scale(self):
+        graph, _ = BURN_SUBTITLES.build_beauty_filter_graph(
+            "ass='/tmp/subtitles.ass'",
+            1920,
+            1080,
+            (1300, 20, 500, 500),
+            filter_prefix=["crop=1080:1080:420:0"],
+            scale_to=(720, 720),
+            progress_overlay_height=54,
+        )
+
+        self.assertIn(
+            "[beautified]crop=1080:1080:420:0,scale=720:720[prepared]",
+            graph,
+        )
+        self.assertIn("crop=iw:54:0:ih-54,format=rgba", graph)
+        self.assertTrue(graph.endswith("ass='/tmp/subtitles.ass'[video_out]"))
 
     def test_graph_rejects_invalid_strength(self):
         with self.assertRaisesRegex(ValueError, "At least one"):

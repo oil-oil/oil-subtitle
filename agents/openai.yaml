@@ -1,4 +1,4 @@
 interface:
   display_name: "Oil Subtitle"
-  short_description: "转录、校对、预览并烧录中文或中英双语字幕"
+  short_description: "转录、校对、预览并烧录中文字幕"
   default_prompt: "使用 $oil-subtitle，为这个本地视频生成并校对字幕。"

@@ -114,6 +114,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   }
   .video-wrap {
     flex: 1;
+    min-height: 0;
     background: #000;
     display: flex;
     align-items: center;
@@ -124,6 +125,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .video-wrap video { width: 100%; height: 100%; object-fit: contain; }
   .current-subtitle {
     position: absolute;
+    z-index: 7;
     bottom: 4.5%;
     left: 50%;
     transform: translateX(-50%);
@@ -166,33 +168,41 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     right: 0;
     bottom: 0;
     left: 0;
-    height: 22px;
+    height: clamp(56px, 9vh, 76px);
     display: none;
     overflow: hidden;
-    border-top: 1px solid rgba(255,255,255,.16);
-    background: rgba(54,54,58,.62);
+    background: linear-gradient(
+      to bottom,
+      rgba(47,47,49,0) 0%,
+      rgba(47,47,49,.20) 34%,
+      rgba(47,47,49,.72) 100%
+    );
     pointer-events: none;
   }
   .content-progress.visible { display: block; }
+  .video-pane.has-progress .current-subtitle { bottom: 12%; }
   .content-progress-fill {
     position: absolute;
     z-index: 1;
-    inset: 0 auto 0 0;
+    top: auto;
+    bottom: 0;
+    left: 0;
+    height: 3px;
     width: 0;
-    background: rgba(198,198,204,.50);
+    background: #ffffff;
   }
-  .content-progress-markers { position: absolute; z-index: 2; inset: 0; }
+  .content-progress-markers { position: absolute; z-index: 2; inset: 34% 0 3px; }
   .content-progress-marker {
     position: absolute;
     top: 0;
     bottom: 0;
-    width: 1px;
-    background: rgba(255,255,255,.40);
+    width: 2px;
+    background: rgba(255,255,255,.22);
   }
   .content-progress-labels {
     position: absolute;
     z-index: 3;
-    inset: 0;
+    inset: 32% 0 4px;
   }
   .content-progress-label {
     position: absolute;
@@ -202,9 +212,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     align-items: center;
     justify-content: center;
     overflow: hidden;
-    padding: 0 2px;
+    padding: 0 8px;
     color: rgba(255,255,255,.94);
-    font-size: 11px;
+    font-size: 13px;
     font-weight: 600;
     line-height: 1;
     letter-spacing: .02em;
@@ -680,6 +690,7 @@ function setupContentProgress() {
   const minDuration = Number(manifest.min_progress_duration ?? 180);
   const enabled = duration > minDuration && chapters.length > 1;
   contentProgress.classList.toggle('visible', enabled);
+  videoPaneEl.classList.toggle('has-progress', enabled);
   contentProgressMarkers.replaceChildren();
   contentProgressLabels.replaceChildren();
   if (!enabled) return;

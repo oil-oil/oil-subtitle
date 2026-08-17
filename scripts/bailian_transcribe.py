@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Transcribe audio or video with Bailian FunAudio ASR via the `bl` CLI.
+Transcribe audio or video with Bailian FunAudio ASR via the DashScope SDK.
 
 Output format matches local_transcribe.py:
   [{"start": 0.0, "end": 1.23, "text": "...", "words": [...]}]
@@ -21,7 +21,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from user_config import load_user_config, optional_user_path
+from dashscope_client import call_qwen_text, transcribe_audio_file
+from user_config import load_dashscope_api_key, load_user_config, optional_user_path
 
 
 FFMPEG = os.environ.get("FFMPEG") or shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
@@ -82,17 +83,6 @@ def _extract_audio(input_path: Path, output_path: Path):
     ])
 
 
-def _load_dashscope_api_key() -> str | None:
-    key = os.environ.get("DASHSCOPE_API_KEY")
-    if key:
-        return key
-    config_path = Path.home() / ".bailian" / "config.json"
-    try:
-        return json.loads(config_path.read_text(encoding="utf-8")).get("api_key")
-    except Exception:
-        return None
-
-
 def ensure_hotword_vocabulary() -> str | None:
     """
     Create or reuse a Bailian hot-word vocabulary from the configured file.
@@ -126,7 +116,7 @@ def ensure_hotword_vocabulary() -> str | None:
     if cache.get("hash") == digest and cache.get("vocabulary_id"):
         return cache["vocabulary_id"]
 
-    api_key = _load_dashscope_api_key()
+    api_key = load_dashscope_api_key(required=False)
     if not api_key:
         log("WARNING: no DashScope API key found; continuing without hot words.")
         return None
@@ -136,7 +126,7 @@ def ensure_hotword_vocabulary() -> str | None:
         from dashscope.audio.asr import VocabularyService
 
         dashscope.api_key = api_key
-        service = VocabularyService()
+        service = VocabularyService(api_key=api_key)
         vocabulary_id = cache.get("vocabulary_id")
         if vocabulary_id:
             try:
@@ -569,31 +559,17 @@ def _llm_split_text(full_text: str, model: str = SPLIT_LLM_MODEL) -> list[str] |
     keeps getting wrong in new ways; timing limits stay mechanical.
     """
     try:
-        result = subprocess.run(
-            [
-                "bl", "text", "chat",
-                "--model", model,
-                "--system", _SPLIT_SYSTEM_PROMPT,
-                "--message", full_text,
-                "--max-tokens", "8192",
-                "--temperature", "0.1",
-                "--output", "json",
-                "--quiet",
-            ],
-            capture_output=True, text=True, timeout=180,
+        content, _usage = call_qwen_text(
+            prompt=full_text,
+            system=_SPLIT_SYSTEM_PROMPT,
+            model=model,
+            max_tokens=8192,
+            temperature=0.1,
+            timeout=180,
         )
-    except (subprocess.TimeoutExpired, OSError) as exc:
+    except Exception as exc:
         log(f"WARNING: LLM split call failed: {exc}")
         return None
-    if result.returncode != 0:
-        log(f"WARNING: LLM split call failed: {(result.stderr or result.stdout)[:200]}")
-        return None
-
-    try:
-        payload = json.loads(result.stdout)
-        content = payload["choices"][0]["message"]["content"]
-    except Exception:
-        content = result.stdout
 
     lines = [line.strip() for line in (content or "").splitlines() if line.strip()]
     if not lines:
@@ -847,27 +823,20 @@ def transcribe_file(
         log("Extracting 16 kHz mono audio...")
         _extract_audio(input_path, audio_path)
 
-        raw_path = raw_output_path or (Path(tmpdir) / "bailian_asr.json")
-        cmd = [
-            "bl",
-            "speech",
-            "recognize",
-            "--url", str(audio_path),
-            "--out", str(raw_path),
-            "--quiet",
-        ]
-        if language:
-            cmd.extend(["--language", language])
-        if vocabulary_id:
-            cmd.extend(["--vocabulary-id", vocabulary_id])
-
         lang_display = language or "auto"
         log(f"Transcribing with Bailian FunAudio ASR (language={lang_display}"
             + (", hot words on" if vocabulary_id else "") + ")...")
-        _run(cmd)
-
-        with open(raw_path, encoding="utf-8") as f:
-            raw = json.load(f)
+        raw = transcribe_audio_file(
+            audio_path,
+            model=VOCABULARY_TARGET_MODEL,
+            language=language,
+            vocabulary_id=vocabulary_id,
+        )
+        if raw_output_path:
+            raw_output_path.write_text(
+                json.dumps(raw, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
 
     raw_segments = _convert_bailian_result(raw)
     cleaned_segments, removed_fillers = (

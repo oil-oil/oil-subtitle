@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 import sys
@@ -12,8 +13,8 @@ sys.path.insert(0, str(SCRIPT_DIR))
 import prepare_subtitles as PREPARE  # noqa: E402
 
 
-class SubtitleModeTests(unittest.TestCase):
-    def test_chinese_mode_prepares_text_without_translation_or_api_key(self):
+class SubtitlePreparationTests(unittest.TestCase):
+    def test_short_chinese_video_needs_no_chapter_model_call(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             transcript = root / "transcript.json"
@@ -39,13 +40,11 @@ class SubtitleModeTests(unittest.TestCase):
             ]
             with patch.dict(
                 os.environ,
-                {
-                    "SCREEN_STUDIO_EDITOR_CONFIG": str(root / "missing.json"),
-                    "SCREEN_STUDIO_EDITOR_SUBTITLE_MODE": "",
-                    "ZENMUX_API_KEY": "",
-                },
+                {"OIL_SUBTITLE_CONFIG": str(root / "missing.json")},
                 clear=False,
-            ), patch.object(sys, "argv", argv):
+            ), patch.object(sys, "argv", argv), patch.object(
+                PREPARE, "model_json", side_effect=AssertionError("unexpected call")
+            ):
                 PREPARE.main()
 
             payload = json.loads(output.read_text(encoding="utf-8"))
@@ -53,64 +52,44 @@ class SubtitleModeTests(unittest.TestCase):
 
         self.assertEqual(payload["subtitle_mode"], "zh")
         self.assertEqual(payload["segments"][0]["text"], "你好世界")
-        self.assertNotIn("en", payload["segments"][0])
         self.assertFalse(chapter_payload["enabled"])
-        self.assertEqual(chapter_payload["min_progress_duration"], 180.0)
-
-    def test_missing_config_defaults_to_chinese(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            missing = Path(tmp) / "missing.json"
-            with patch.dict(
-                os.environ,
-                {"SCREEN_STUDIO_EDITOR_CONFIG": str(missing)},
-                clear=False,
-            ):
-                os.environ.pop("SCREEN_STUDIO_EDITOR_SUBTITLE_MODE", None)
-                self.assertEqual(PREPARE.resolve_subtitle_mode("auto"), "zh")
-
-    def test_config_can_enable_bilingual_mode(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            config = Path(tmp) / "config.json"
-            config.write_text(
-                json.dumps({"subtitles": {"mode": "bilingual"}}),
-                encoding="utf-8",
-            )
-            with patch.dict(
-                os.environ,
-                {"SCREEN_STUDIO_EDITOR_CONFIG": str(config)},
-                clear=False,
-            ):
-                os.environ.pop("SCREEN_STUDIO_EDITOR_SUBTITLE_MODE", None)
-                self.assertEqual(PREPARE.resolve_subtitle_mode("auto"), "bilingual")
-
-    def test_explicit_mode_overrides_config(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            config = Path(tmp) / "config.json"
-            config.write_text(
-                json.dumps({"subtitles": {"mode": "zh"}}),
-                encoding="utf-8",
-            )
-            with patch.dict(
-                os.environ,
-                {"SCREEN_STUDIO_EDITOR_CONFIG": str(config)},
-                clear=False,
-            ):
-                self.assertEqual(
-                    PREPARE.resolve_subtitle_mode("bilingual"), "bilingual"
-                )
 
     def test_progress_threshold_defaults_to_three_minutes(self):
         with tempfile.TemporaryDirectory() as tmp:
             missing = Path(tmp) / "missing.json"
             with patch.dict(
-                os.environ,
-                {"SCREEN_STUDIO_EDITOR_CONFIG": str(missing)},
-                clear=False,
+                os.environ, {"OIL_SUBTITLE_CONFIG": str(missing)}, clear=False
             ):
-                os.environ.pop("SCREEN_STUDIO_EDITOR_PROGRESS_MIN_DURATION", None)
                 self.assertEqual(PREPARE.resolve_progress_min_duration(None), 180.0)
 
-    def test_progress_threshold_can_be_configured_and_explicitly_overridden(self):
+    def test_progress_is_enabled_by_default_and_can_be_disabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp) / "missing.json"
+            with patch.dict(
+                os.environ, {"OIL_SUBTITLE_CONFIG": str(missing)}, clear=False
+            ):
+                self.assertTrue(PREPARE.resolve_progress_enabled(None))
+                self.assertFalse(PREPARE.resolve_progress_enabled(False))
+
+    def test_progress_can_be_persistently_disabled_in_user_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "config.json"
+            config.write_text(
+                json.dumps({"subtitles": {"progress_enabled": False}}),
+                encoding="utf-8",
+            )
+            with patch.dict(
+                os.environ,
+                {
+                    "OIL_SUBTITLE_CONFIG": str(config),
+                    "OIL_SUBTITLE_PROGRESS_ENABLED": "",
+                },
+                clear=False,
+            ):
+                self.assertFalse(PREPARE.resolve_progress_enabled(None))
+                self.assertTrue(PREPARE.resolve_progress_enabled(True))
+
+    def test_progress_threshold_can_be_configured_and_overridden(self):
         with tempfile.TemporaryDirectory() as tmp:
             config = Path(tmp) / "config.json"
             config.write_text(
@@ -120,15 +99,12 @@ class SubtitleModeTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with patch.dict(
-                os.environ,
-                {"SCREEN_STUDIO_EDITOR_CONFIG": str(config)},
-                clear=False,
+                os.environ, {"OIL_SUBTITLE_CONFIG": str(config)}, clear=False
             ):
-                os.environ.pop("SCREEN_STUDIO_EDITOR_PROGRESS_MIN_DURATION", None)
                 self.assertEqual(PREPARE.resolve_progress_min_duration(None), 240.0)
                 self.assertEqual(PREPARE.resolve_progress_min_duration(180), 180.0)
 
-    def test_shorter_video_chapter_prompt_uses_fewer_broad_sections(self):
+    def test_chapter_prompt_uses_fewer_sections_for_shorter_video(self):
         segments = [{"start": 0.0, "text": "测试"}]
         self.assertIn(
             "Use 2 to 4 chapters total",
@@ -138,6 +114,59 @@ class SubtitleModeTests(unittest.TestCase):
             "Use 4 to 6 chapters total",
             PREPARE.chapter_prompt(segments, 301.0, 6),
         )
+
+    def test_model_json_calls_dashscope_sdk_wrapper(self):
+        response = {"chapters": [{"start_id": 0, "title": "内容开场"}]}
+        with patch.object(
+            PREPARE, "call_qwen_json", return_value=(response, None)
+        ) as call:
+            payload, usage = PREPARE.model_json(
+                prompt="字幕",
+                model="qwen-plus",
+                timeout=30,
+                max_tokens=500,
+            )
+
+        kwargs = call.call_args.kwargs
+        self.assertEqual(kwargs["model"], "qwen-plus")
+        self.assertEqual(kwargs["timeout"], 30)
+        self.assertEqual(payload["chapters"][0]["start_id"], 0)
+        self.assertIsNone(usage)
+
+    def test_plan_chapters_uses_subtitle_segment_ids(self):
+        segments = [
+            {"start": 0.0, "end": 89.0, "text": "开场"},
+            {"start": 90.0, "end": 179.0, "text": "第一部分"},
+            {"start": 180.0, "end": 269.0, "text": "第二部分"},
+            {"start": 270.0, "end": 360.0, "text": "结尾"},
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            args = argparse.Namespace(
+                progress_enabled=True,
+                min_progress_duration=180.0,
+                model="qwen-plus",
+                max_chapters=6,
+                min_chapter_duration=75.0,
+                work_dir=Path(tmp),
+                resume=False,
+                timeout=30,
+            )
+            response = {
+                "chapters": [
+                    {"start_id": 0, "title": "内容开场"},
+                    {"start_id": 2, "title": "核心方法"},
+                ]
+            }
+            with patch.object(
+                PREPARE, "model_json", return_value=(response, None)
+            ):
+                chapters, usage = PREPARE.plan_chapters(
+                    segments, 360.0, args=args
+                )
+
+        self.assertIsNone(usage)
+        self.assertEqual([item["start"] for item in chapters], [0.0, 180.0])
+        self.assertEqual([item["title"] for item in chapters], ["内容开场", "核心方法"])
 
 
 if __name__ == "__main__":
