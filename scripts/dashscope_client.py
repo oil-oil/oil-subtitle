@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared DashScope SDK calls for text generation and file transcription."""
+"""Shared DashScope SDK calls for text, vision, and file transcription."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from typing import Any
 from urllib.request import urlopen
 
 import dashscope
-from dashscope import Generation
+from dashscope import Generation, MultiModalConversation
 from dashscope.audio.asr import Transcription
 from dashscope.utils.oss_utils import OssUtils
 
@@ -117,6 +117,93 @@ def call_qwen_json(
                 raise RuntimeError("DashScope text generation returned invalid JSON")
             retry_note = "\n上一次输出不是合法 JSON。这次只返回合法 JSON。"
     raise AssertionError("unreachable")
+
+
+def _multimodal_text(response: Any) -> str:
+    choices = response.output.get("choices") or []
+    if not choices:
+        raise RuntimeError("DashScope vision generation returned no choices")
+    content = (choices[0].get("message") or {}).get("content")
+    if isinstance(content, str) and content.strip():
+        return content.strip()
+    if isinstance(content, list):
+        parts = [
+            str(item.get("text") or "").strip()
+            for item in content
+            if isinstance(item, dict) and item.get("text")
+        ]
+        if parts:
+            return "\n".join(parts)
+    raise RuntimeError("DashScope vision generation returned no text")
+
+
+def call_qwen_multimodal_json(
+    *,
+    prompt: str,
+    images: list[Path] | None = None,
+    model: str = "qwen3.7-flash",
+    max_tokens: int = 1800,
+    temperature: float = 0,
+    timeout: int | None = None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Ask a DashScope multimodal model to return structured JSON."""
+    api_key = _configure()
+    content = [
+        {"image": Path(path).resolve().as_uri()} for path in (images or [])
+    ]
+    retry_note = ""
+    last_usage: dict[str, Any] | None = None
+    for attempt in range(2):
+        response = MultiModalConversation.call(
+            model=model,
+            api_key=api_key,
+            messages=[
+                {
+                    "role": "user",
+                    "content": content
+                    + [{"text": prompt + retry_note}],
+                }
+            ],
+            result_format="message",
+            max_tokens=max_tokens,
+            temperature=temperature,
+            timeout=timeout,
+            enable_thinking=False,
+            response_format={"type": "json_object"},
+        )
+        if response.status_code != HTTPStatus.OK:
+            raise _response_error(response, "vision generation")
+        text = _multimodal_text(response)
+        last_usage = dict(response.usage) if getattr(response, "usage", None) else None
+        try:
+            return extract_json_from_text(text), last_usage
+        except (json.JSONDecodeError, ValueError):
+            if attempt == 1:
+                raise RuntimeError("DashScope vision generation returned invalid JSON")
+            retry_note = "\n上一次输出不是合法 JSON。这次只返回合法 JSON。"
+    raise AssertionError("unreachable")
+
+
+def call_qwen_vision_json(
+    *,
+    prompt: str,
+    images: list[Path],
+    model: str = "qwen3.7-flash",
+    max_tokens: int = 1800,
+    temperature: float = 0,
+    timeout: int | None = None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Ask a DashScope vision model to inspect local images and return JSON."""
+    if not images:
+        raise ValueError("At least one image is required")
+    return call_qwen_multimodal_json(
+        prompt=prompt,
+        images=images,
+        model=model,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        timeout=timeout,
+    )
 
 
 def transcribe_audio_file(

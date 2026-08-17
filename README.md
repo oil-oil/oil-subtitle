@@ -23,7 +23,10 @@
 ```text
 demo.subtitle-work/
 ├── bailian_asr.json             # 原始 ASR 响应
-├── transcript.json              # 校正并分行后的转录稿
+├── transcript.json              # ASR、术语校正并分行后的转录稿
+├── reviewed-transcript.json     # 语义与视觉校对后的转录稿
+├── subtitle-review.json         # 已确认和待人工确认的疑点报告
+├── review-frames/               # 疑点时间附近的验证帧
 ├── subtitle-transcript.json     # 人工预览后保存的字幕
 ├── subtitle-chapters.json       # 长视频章节
 └── subtitle-manifest.json       # 本地预览入口
@@ -38,9 +41,10 @@ demo_subtitled.mp4
 1. 用 FFmpeg 从本地视频提取单声道音频。
 2. 通过 DashScope Python SDK 调用百炼 FunAudio ASR，保留原始识别结果和词级时间戳。
 3. 在识别阶段应用 hotwords，再用 glossary 修正常见误识别。
-4. 用 Qwen 完成字幕级断句；章节进度默认开启，视频严格超过 3 分钟时，同时根据字幕生成 2–6 个宽粒度章节，并在视频画面底部以半透明渐变阴影展示进度。
-5. 启动本地字幕编辑器，由用户逐句检查、修改或删除字幕。
-6. 生成 SRT、ASS，并用 FFmpeg 一次烧录成片。
+4. 用 `qwen3.7-flash` 做语义校对；遇到型号、版本号、命令、文件名或界面文字时，自动抽取对应时间附近的三帧，再用同一模型视觉核对。看不清的内容保留给用户确认，不凭模型知识猜测。
+5. 用 Qwen 完成字幕级断句；章节进度默认开启，视频严格超过 3 分钟时，同时根据字幕生成 2–6 个宽粒度章节，并在视频画面底部以半透明渐变阴影展示进度。
+6. 启动本地字幕编辑器，由用户检查脚本未能确认的内容，并按需修改或删除字幕。
+7. 生成 SRT、ASS，并用 FFmpeg 一次烧录成片。
 
 正常烧录还会检测持续出现的人脸区域并执行固定轻度美颜；需要保留原画时使用 `--no-beauty`。
 
@@ -137,8 +141,15 @@ mkdir -p "$WORK"
   --raw-output "$WORK/bailian_asr.json" \
   --language zh
 
-"$SKILL_DIR/.venv/bin/python3" "$SKILL_DIR/scripts/prepare_subtitles.py" \
+"$SKILL_DIR/.venv/bin/python3" "$SKILL_DIR/scripts/review_subtitles.py" \
+  --video "$VIDEO" \
   --transcript "$WORK/transcript.json" \
+  --output "$WORK/reviewed-transcript.json" \
+  --report "$WORK/subtitle-review.json" \
+  --frames-dir "$WORK/review-frames"
+
+"$SKILL_DIR/.venv/bin/python3" "$SKILL_DIR/scripts/prepare_subtitles.py" \
+  --transcript "$WORK/reviewed-transcript.json" \
   --video "$VIDEO" \
   --output "$WORK/subtitle-transcript.json" \
   --chapters-output "$WORK/subtitle-chapters.json" \
@@ -170,6 +181,7 @@ mkdir -p "$WORK"
 | --- | --- |
 | `scripts/configure_api_key.py` | 一次性保存或迁移百炼 API Key |
 | `scripts/bailian_transcribe.py` | FunAudio ASR、hotwords、glossary 和字幕分行 |
+| `scripts/review_subtitles.py` | Qwen 语义校对、疑点检测、按需抽帧和视觉核对 |
 | `scripts/local_transcribe.py` | 本地 Whisper 降级转录 |
 | `scripts/prepare_subtitles.py` | 准备中文字幕、章节和预览 manifest |
 | `scripts/preview_editor.py` | 启动本地字幕预览编辑器 |

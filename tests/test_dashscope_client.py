@@ -100,6 +100,65 @@ class DashScopeClientTests(unittest.TestCase):
         self.assertEqual(submit.call_args.kwargs["language_hints"], ["zh"])
         self.assertEqual(wait.call_args.kwargs["task"], "task-1")
 
+    def test_qwen_vision_json_uploads_local_images_via_sdk(self):
+        response = SimpleNamespace(
+            status_code=200,
+            output={
+                "choices": [
+                    {
+                        "message": {
+                            "content": [
+                                {
+                                    "text": '{"decision":"keep","confidence":0.99}'
+                                }
+                            ]
+                        }
+                    }
+                ]
+            },
+            usage={"total_tokens": 30},
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            image = Path(tmp) / "frame.jpg"
+            image.write_bytes(b"test")
+            with patch.object(CLIENT, "_configure", return_value="secret"), patch.object(
+                CLIENT.MultiModalConversation, "call", return_value=response
+            ) as call:
+                payload, usage = CLIENT.call_qwen_vision_json(
+                    prompt="核对",
+                    images=[image],
+                    model="qwen3.7-flash",
+                )
+
+        self.assertEqual(payload["decision"], "keep")
+        self.assertEqual(usage, {"total_tokens": 30})
+        content = call.call_args.kwargs["messages"][0]["content"]
+        self.assertTrue(content[0]["image"].startswith("file://"))
+        self.assertEqual(call.call_args.kwargs["api_key"], "secret")
+        self.assertFalse(call.call_args.kwargs["enable_thinking"])
+        self.assertEqual(
+            call.call_args.kwargs["response_format"], {"type": "json_object"}
+        )
+
+    def test_qwen_multimodal_json_accepts_text_only_review(self):
+        response = SimpleNamespace(
+            status_code=200,
+            output={
+                "choices": [
+                    {"message": {"content": [{"text": '{"items":[]}' }]}}
+                ]
+            },
+            usage=None,
+        )
+        with patch.object(CLIENT, "_configure", return_value="secret"), patch.object(
+            CLIENT.MultiModalConversation, "call", return_value=response
+        ) as call:
+            payload, _usage = CLIENT.call_qwen_multimodal_json(prompt="校对")
+
+        self.assertEqual(payload, {"items": []})
+        content = call.call_args.kwargs["messages"][0]["content"]
+        self.assertEqual(content, [{"text": "校对"}])
+
 
 class ApiKeyConfigTests(unittest.TestCase):
     def test_saved_key_uses_private_permissions_and_can_be_reloaded(self):

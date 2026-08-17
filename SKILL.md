@@ -10,12 +10,13 @@ description: >
 
 只负责已经导出的视频字幕，不修改 Screen Studio 工程。
 
-脚本负责 ASR、术语表、分行、章节、排版、人脸区域检测和 FFmpeg 烧录。Agent 负责确认输入输出、校对不确定文本、组织用户预览、检查最终结果，不要手工复述或重做脚本内部逻辑。
+脚本负责 ASR、术语表、分行、疑点检测、按需抽帧、视觉校对、章节、排版、人脸区域检测和 FFmpeg 烧录。Agent 负责确认输入输出、处理脚本仍无法确认的疑点、组织用户预览、检查最终结果，不要手工复述或重做脚本内部逻辑。
 
 ## 默认行为
 
 - 只生成中文字幕。默认使用 DashScope Python SDK 调用百炼 FunAudio ASR；字幕断句和长视频章节由百炼 Qwen 完成，全部共用一个 API Key。旧本地 Whisper 仅用于明确比较或远程服务不可用时的降级。
 - ASR 自动应用外部 hotwords 和 glossary；人工只补充脚本没有覆盖的高置信错误。
+- 转录后默认使用 `qwen3.7-flash` 运行两阶段自动校对：先做语义检查，再只对命中的型号、版本号、命令、文件名和界面文字执行视觉核对。不得让文本模型凭知识猜测版本号，也不得静默跳过这一步。
 - 字幕默认不显示标点；人工审阅过的 SRT 通过 `--srt-input` 直烧时保持文本、换行和时间码不变。
 - 章节进度功能默认开启。视频严格超过三分钟时，在视频画面底部用半透明渐变阴影承载宽粒度章节进度；不增加实色画布，也不把每个小点拆成章节。
 - 用户只要用自然语言说“关闭章节进度条”或同义表达，本次任务就在准备和烧录命令中都传 `--no-progress`，不生成章节，也不显示进度条；用户说“开启章节进度条”时传 `--progress`。这是单次任务开关，不要求用户修改配置文件。
@@ -98,19 +99,35 @@ ffmpeg -i "$VIDEO" -ar 16000 -ac 1 "$WORK/audio.wav" -y
 
 ### 3. 校对转录稿
 
-阅读 `transcript.json`，只修改 segment 的 `text`：
+先运行自动校对，不要让 Agent 手工扫描整份转录稿：
+
+```bash
+"$PYTHON" "$SKILL_DIR/scripts/review_subtitles.py" \
+  --video "$VIDEO" \
+  --transcript "$WORK/transcript.json" \
+  --output "$WORK/reviewed-transcript.json" \
+  --report "$WORK/subtitle-review.json" \
+  --frames-dir "$WORK/review-frames"
+```
+
+脚本必须执行以下两阶段流程：
+
+1. 语义检查：直接修复上下文唯一确定且置信度足够高的错字、产品名和大小写。
+2. 视觉检查：型号、版本号、命令、文件名、组织名和界面文字一律抽取字幕时间附近三帧，再由百炼视觉模型核对。画面没有显示或看不清时保留原文，并写入 `subtitle-review.json` 的 `unresolved`，不得猜测。
+
+检查 `subtitle-review.json`。只人工处理 `unresolved` 项，并结合其中的帧路径确认；没有未解决项时直接进入下一步。所有修改只允许落在 segment 的 `text`：
 
 - 明确的产品名、专有名词和大小写错误；
 - 从上下文或画面能够确认的 ASR 错误；
 - 新出现、尚未被 glossary 覆盖的重复误识别。
 
-不确定的命令、文件名或界面文字，先抽取目标时间附近的画面再判断。word 级 token 仅用于排查时间，不得覆盖已经确认的 segment 文本。
+禁止修改 word 级 token；它们只用于时间定位，不得覆盖已经确认的 segment 文本。用户明确要求跳过自动校对时才可省略本步骤，并需要在交付时说明。
 
 ### 4. 准备字幕和章节
 
 ```bash
 "$PYTHON" "$SKILL_DIR/scripts/prepare_subtitles.py" \
-  --transcript "$WORK/transcript.json" \
+  --transcript "$WORK/reviewed-transcript.json" \
   --video "$VIDEO" \
   --output "$WORK/subtitle-transcript.json" \
   --chapters-output "$WORK/subtitle-chapters.json" \
