@@ -16,6 +16,8 @@
 
 左侧实时预览字幕和章节进度，右侧逐句修改、删除或批量查找替换，确认后点击「保存并关闭」即可继续烧录。
 
+保存时会自动比较人工修改，并用 `qwen3.7-flash` 判断哪些属于以后还会遇到的 ASR 错词。只有高置信、安全且不冲突的映射进入个人错题本；润色、删句和标点修改不会污染词库。
+
 ## 最终会得到什么
 
 一次完整处理会保留可追溯的中间结果，并交付可继续修改的字幕文件和成片：
@@ -28,6 +30,7 @@ demo.subtitle-work/
 ├── subtitle-review.json         # 已确认和待人工确认的疑点报告
 ├── review-frames/               # 疑点时间附近的验证帧
 ├── subtitle-transcript.json     # 人工预览后保存的字幕
+├── manual-edit-review.json      # 人工修改的学习、忽略与冲突记录
 ├── subtitle-chapters.json       # 长视频章节
 └── subtitle-manifest.json       # 本地预览入口
 
@@ -44,7 +47,8 @@ demo_subtitled.mp4
 4. 用 `qwen3.7-flash` 做语义校对；遇到型号、版本号、命令、文件名或界面文字时，自动抽取对应时间附近的三帧，再用同一模型视觉核对。看不清的内容保留给用户确认，不凭模型知识猜测。
 5. 用 Qwen 完成字幕级断句；章节进度默认开启，视频严格超过 3 分钟时，同时根据字幕生成 2–6 个宽粒度章节，并在视频画面底部以半透明渐变阴影展示进度。
 6. 启动本地字幕编辑器，由用户检查脚本未能确认的内容，并按需修改或删除字幕。
-7. 生成 SRT、ASS，并用 FFmpeg 一次烧录成片。
+7. 保存时自动提取人工修改，由 `qwen3.7-flash` 判断是否加入个人 glossary，并生成可追溯的判断报告。
+8. 生成 SRT、ASS，并用 FFmpeg 一次烧录成片。
 
 正常烧录还会检测持续出现的人脸区域并执行固定轻度美颜；需要保留原画时使用 `--no-beauty`。
 
@@ -90,7 +94,7 @@ FunAudio ASR、Qwen 字幕断句、章节生成和 hotwords 共用同一个百�
 
 ## 维护 hotwords 与 glossary
 
-词库全部使用普通 JSON 文件，放在用户自己的配置目录，不必修改 Skill 代码，也不要把个人词库或 API Key 提交进仓库。
+词库全部使用普通 JSON 文件，放在用户自己的配置目录，不必修改 Skill 代码，也不要把个人词库或 API Key 提交进仓库。个人 glossary 默认保存在 `~/.config/oil-subtitle/glossary.json`；只有希望换位置时才需要在配置中填写 `glossary`。
 
 `hotwords.json` 在 ASR 识别阶段提高产品名、英文缩写和人名的命中率：
 
@@ -123,7 +127,7 @@ FunAudio ASR、Qwen 字幕断句、章节生成和 hotwords 共用同一个百�
 }
 ```
 
-校对后只把会重复出现、且能够确定的误识别补进 glossary；一次性的改写、删句和标点调整不应进入公共或个人词库。hotwords 内容变化后，脚本会自动更新远程词表缓存。
+预览页保存后，脚本会固定比较修改前后的字幕，并用 `qwen3.7-flash` 逐项判断。只有置信度至少为 `0.97`、来自原句连续子串、保留必要上下文且不与已有规则冲突的错词映射才会自动追加；一次性改写、删句、标点调整和无法确认的修改会记录在 `manual-edit-review.json`，但不会进入词库。hotwords 内容变化后，脚本会自动更新远程词表缓存。
 
 ## 手动运行
 
@@ -172,8 +176,9 @@ mkdir -p "$WORK"
 
 - 远程转录会把从视频提取的音频上传到百炼临时存储。
 - 字幕断句和章节生成会把对应的字幕文本发送给百炼 Qwen。
+- 用户保存预览修改后，修改前后的相关字幕片段会发送给百炼 Qwen，用于判断是否加入个人错题本。
 - API Key、个人配置和词库保存在用户目录，不应进入仓库。
-- 本地预览、人工修改、SRT/ASS 生成和 FFmpeg 烧录都在本机完成。
+- 预览界面、人工编辑、判断报告、个人词库写入、SRT/ASS 生成和 FFmpeg 烧录都在本机完成。
 
 ## 脚本索引
 
@@ -185,6 +190,7 @@ mkdir -p "$WORK"
 | `scripts/local_transcribe.py` | 本地 Whisper 降级转录 |
 | `scripts/prepare_subtitles.py` | 准备中文字幕、章节和预览 manifest |
 | `scripts/preview_editor.py` | 启动本地字幕预览编辑器 |
+| `scripts/learn_glossary.py` | 从人工修改中判断并学习可复用的 ASR 错词 |
 | `scripts/burn_subtitles.py` | 生成 SRT/ASS 并烧录 MP4 |
 
 ## 测试

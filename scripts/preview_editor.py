@@ -11,6 +11,8 @@ import sys
 import threading
 from pathlib import Path
 
+from learn_glossary import learn_manual_edits
+
 from flask import (
     Flask,
     Response,
@@ -1062,6 +1064,10 @@ document.getElementById('btnSave').addEventListener('click', async () => {
     .filter(s => !deletedIds.has(s._id))
     .map(({ _id, ...rest }) => rest);
 
+  const saveBtn = document.getElementById('btnSave');
+  saveBtn.disabled = true;
+  statusTxt.textContent = '正在保存，并判断是否加入错题本…';
+
   const res = await fetch('/api/transcript', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1070,8 +1076,17 @@ document.getElementById('btnSave').addEventListener('click', async () => {
 
   if (!res.ok) {
     statusTxt.textContent = '保存失败，请重试';
+    saveBtn.disabled = false;
     return;
   }
+  const result = await res.json();
+  const learning = result.glossary_learning || {};
+  const learnedCount = Number(learning.learned_count || 0);
+  const learningNote = learning.status === 'error'
+    ? '，错题本判断失败，请让 Agent 重试'
+    : learnedCount > 0
+      ? `，错题本新增 ${learnedCount} 条`
+      : '，没有需要加入错题本的修改';
 
   localStorage.removeItem(LS_KEY);
 
@@ -1081,12 +1096,12 @@ document.getElementById('btnSave').addEventListener('click', async () => {
   let notified = false;
   try {
     if (window.Oil && typeof window.Oil.sendMessage === 'function') {
-      await window.Oil.sendMessage({ text: '检查完成，开始烧录', closePreview: true });
+      await window.Oil.sendMessage({ text: `检查完成${learningNote}，开始烧录`, closePreview: true });
       notified = true;
     } else if (window.parent !== window) {
       window.parent.postMessage({
         type: 'SAVE_DONE',
-        text: '检查完成，开始烧录',
+        text: `检查完成${learningNote}，开始烧录`,
         closePreview: true
       }, '*');
       notified = true;
@@ -1096,8 +1111,8 @@ document.getElementById('btnSave').addEventListener('click', async () => {
   }
 
   statusTxt.textContent = notified
-    ? `✅ 已保存 ${toSave.length} 条字幕，已通知 Agent 继续烧录`
-    : `✅ 已保存 ${toSave.length} 条字幕，可关闭此页面`;
+    ? `✅ 已保存 ${toSave.length} 条字幕${learningNote}，已通知 Agent 继续烧录`
+    : `✅ 已保存 ${toSave.length} 条字幕${learningNote}，可关闭此页面`;
   window.close(); // may be blocked by browser; user can close manually
 });
 </script>
@@ -1178,11 +1193,41 @@ def get_transcript():
 @app.route("/api/transcript", methods=["POST"])
 def post_transcript():
     body = request.get_json()
-    path = _lang_transcript_path(body.get("lang") or request.args.get("lang"))
+    lang = body.get("lang") or request.args.get("lang")
+    path = Path(_lang_transcript_path(lang))
+    original_path = Path(str(path) + ".orig.json")
+    if not original_path.exists():
+        original_path.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
     with open(path, "w", encoding="utf-8") as f:
         json.dump({"segments": body["segments"]}, f, ensure_ascii=False, indent=2)
+    source_lang = "src"
+    if MANIFEST:
+        source = next(
+            (item for item in MANIFEST.get("languages", []) if item.get("source")),
+            None,
+        )
+        source_lang = str((source or {}).get("code") or "src")
+    learning = {"status": "skipped", "learned_count": 0}
+    if not MANIFEST or lang == source_lang:
+        report_path = path.parent / "manual-edit-review.json"
+        try:
+            report = learn_manual_edits(
+                json.loads(original_path.read_text(encoding="utf-8")),
+                {"segments": body["segments"]},
+                report_path=report_path,
+            )
+            learning = {
+                "status": report["status"],
+                "learned_count": len(report["learned"]),
+                "ignored_count": len(report["ignored"]),
+                "conflict_count": len(report["conflicts"]),
+                "report": str(report_path),
+            }
+        except Exception as exc:
+            learning = {"status": "error", "learned_count": 0, "error": str(exc)}
+            print(f"[preview] glossary learning failed: {exc}", flush=True)
     RESULT_DONE.set()
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "glossary_learning": learning})
 
 
 # ----------------------------------------------------------------------------- #

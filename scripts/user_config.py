@@ -13,6 +13,7 @@ PREFERRED_CONFIG = Path.home() / ".config" / "oil-subtitle" / "config.json"
 PREFERRED_API_KEY_FILE = (
     Path.home() / ".config" / "oil-subtitle" / "dashscope_api_key"
 )
+PREFERRED_GLOSSARY = Path.home() / ".config" / "oil-subtitle" / "glossary.json"
 LEGACY_BAILIAN_CONFIG = Path.home() / ".bailian" / "config.json"
 LEGACY_CONFIG = (
     Path.home() / ".config" / "screen-studio-editor" / "config.json"
@@ -87,6 +88,17 @@ def optional_user_path(
 ) -> Path | None:
     value = env_value(env_name, legacy_env_name) or str(config.get(key) or "").strip()
     return Path(value).expanduser() if value else None
+
+
+def resolve_glossary_path(override: str | Path | None = None) -> Path:
+    """Resolve the shared personal glossary, with a usable default path."""
+    if override:
+        return Path(override).expanduser()
+    config = load_user_config()
+    configured = env_value(
+        "OIL_SUBTITLE_GLOSSARY", "SCREEN_STUDIO_EDITOR_GLOSSARY"
+    ) or str(config.get("glossary") or "").strip()
+    return Path(configured).expanduser() if configured else PREFERRED_GLOSSARY
 
 
 def dashscope_api_key_file() -> Path:

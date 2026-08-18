@@ -22,7 +22,12 @@ from pathlib import Path
 from typing import Any
 
 from dashscope_client import call_qwen_text, transcribe_audio_file
-from user_config import load_dashscope_api_key, load_user_config, optional_user_path
+from user_config import (
+    load_dashscope_api_key,
+    load_user_config,
+    optional_user_path,
+    resolve_glossary_path,
+)
 
 
 FFMPEG = os.environ.get("FFMPEG") or shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
@@ -35,12 +40,7 @@ HOTWORDS_PATH = optional_user_path(
     "OIL_SUBTITLE_HOTWORDS",
     "SCREEN_STUDIO_EDITOR_HOTWORDS",
 )
-GLOSSARY_PATH = optional_user_path(
-    USER_CONFIG,
-    "glossary",
-    "OIL_SUBTITLE_GLOSSARY",
-    "SCREEN_STUDIO_EDITOR_GLOSSARY",
-)
+GLOSSARY_PATH = resolve_glossary_path()
 VOCABULARY_CACHE_PATH = optional_user_path(
     USER_CONFIG,
     "vocabulary_cache",

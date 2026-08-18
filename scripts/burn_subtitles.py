@@ -19,7 +19,8 @@ import tempfile
 import textwrap
 from pathlib import Path
 
-from user_config import env_value, load_user_config, resolve_progress_enabled
+from user_config import resolve_glossary_path as resolve_user_glossary_path
+from user_config import resolve_progress_enabled
 
 _DISPLAY_REPLACEMENTS: list[tuple[re.Pattern, str]] = []
 _SUBTITLE_BOX_MAX_WIDTH_RATIO = 0.86
@@ -53,17 +54,8 @@ def set_display_replacements(entries: list[dict]):
 
 
 def resolve_glossary_path(override: str | None = None) -> Path | None:
-    """Resolve an optional user glossary without reading from the skill repository."""
-    if override:
-        return Path(override).expanduser()
-    configured_glossary = env_value(
-        "OIL_SUBTITLE_GLOSSARY", "SCREEN_STUDIO_EDITOR_GLOSSARY"
-    )
-    if configured_glossary:
-        return Path(configured_glossary).expanduser()
-    config = load_user_config()
-    value = str(config.get("glossary") or "").strip() if isinstance(config, dict) else ""
-    return Path(value).expanduser() if value else None
+    """Resolve the same personal glossary used by ASR and manual learning."""
+    return resolve_user_glossary_path(override)
 
 
 def load_user_glossary(override: str | None = None) -> list[dict]:

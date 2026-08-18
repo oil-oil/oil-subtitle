@@ -17,6 +17,7 @@ description: >
 - 只生成中文字幕。默认使用 DashScope Python SDK 调用百炼 FunAudio ASR；字幕断句和长视频章节由百炼 Qwen 完成，全部共用一个 API Key。旧本地 Whisper 仅用于明确比较或远程服务不可用时的降级。
 - ASR 自动应用外部 hotwords 和 glossary；人工只补充脚本没有覆盖的高置信错误。
 - 转录后默认使用 `qwen3.7-flash` 运行两阶段自动校对：先做语义检查，再只对命中的型号、版本号、命令、文件名和界面文字执行视觉核对。不得让文本模型凭知识猜测版本号，也不得静默跳过这一步。
+- 用户在预览页保存字幕时，脚本默认比较修改前后内容，并用 `qwen3.7-flash` 逐项判断是否属于可复用的 ASR 错词。只有高置信、带安全上下文且不与旧规则冲突的映射才写入个人 glossary；润色、删句、标点和一次性改写一律忽略。Agent 不要手工猜测或跳过这一步。
 - 字幕默认不显示标点；人工审阅过的 SRT 通过 `--srt-input` 直烧时保持文本、换行和时间码不变。
 - 章节进度功能默认开启。视频严格超过三分钟时，在视频画面底部用半透明渐变阴影承载宽粒度章节进度；不增加实色画布，也不把每个小点拆成章节。
 - 用户只要用自然语言说“关闭章节进度条”或同义表达，本次任务就在准备和烧录命令中都传 `--no-progress`，不生成章节，也不显示进度条；用户说“开启章节进度条”时传 `--progress`。这是单次任务开关，不要求用户修改配置文件。
@@ -47,7 +48,7 @@ API Key 优先读取 `DASHSCOPE_API_KEY`，否则读取 `API_KEY_FILE`。只需�
 {
   "video_library_root": "/optional/path/to/video-library",
   "hotwords": "/optional/path/to/hotwords.json",
-  "glossary": "/optional/path/to/glossary.json",
+  "glossary": "/optional/custom/path/to/glossary.json",
   "vocabulary_cache": "/optional/path/to/vocabulary-cache.json",
   "subtitles": {
     "progress_enabled": true,
@@ -57,6 +58,8 @@ API Key 优先读取 `DASHSCOPE_API_KEY`，否则读取 `API_KEY_FILE`。只需�
 ```
 
 新配置优先使用 `OIL_SUBTITLE_CONFIG`。为兼容迁移，脚本在新配置不存在时仍会读取 `SCREEN_STUDIO_EDITOR_CONFIG` 及旧环境变量。不要把用户配置、API Key、个人术语表或绝对路径提交进 Skill。
+
+个人 glossary 默认位于 `~/.config/oil-subtitle/glossary.json`。只有需要换位置时才配置 `glossary`；转录、预览学习和烧录始终解析同一个路径。
 
 ## 工作流
 
@@ -153,13 +156,31 @@ PREVIEW_EDITOR_PORT=8765 "$PYTHON" "$SKILL_DIR/scripts/preview_editor.py" \
 
 告诉用户：
 
-> 已准备好字幕预览，请检查文字和时间是否准确。可以双击修改、取消勾选删除，确认后点击「保存并关闭」。
+> 已准备好字幕预览，请检查文字和时间是否准确。可以双击修改、取消勾选删除，确认后点击「保存并关闭」。保存时会自动判断人工修改是否需要加入个人错题本。
 
 等用户确认，或确认 `subtitle-transcript.json` 已被保存后再继续。务必核对首句属于当前视频，不能复用其他视频的 manifest。
 
-### 6. 更新术语表
+### 6. 固定学习人工修改
 
-比较 `subtitle-transcript.json.orig.json` 和保存后的文件。只把会重复出现的 ASR 错误写入用户配置指向的 glossary；不要把一次性改写、删除或标点调整写进术语表。
+预览页保存中文源字幕时会自动执行 `scripts/learn_glossary.py`：
+
+1. 比较 `subtitle-transcript.json.orig.json` 和保存后的字幕，记录每一处人工修改；
+2. 本地规则先排除删句、纯新增、标点空格和整句大改；
+3. `qwen3.7-flash` 判断剩余修改是否为稳定、可复用的 ASR 错词；
+4. 脚本验证候选词确实来自修改前后原句，英文单词纠错必须保留必要的产品上下文；
+5. 置信度至少为 `0.97`、且不覆盖冲突规则时，原子写入个人 glossary；
+6. 全部判断写入 `$WORK/manual-edit-review.json`，包括 learned、ignored 和 conflicts。
+
+保存后检查 `manual-edit-review.json`。如果 `status=error` 或文件缺失，先用同一脚本重试，不要静默跳过后直接烧录：
+
+```bash
+"$PYTHON" "$SKILL_DIR/scripts/learn_glossary.py" \
+  --before "$WORK/subtitle-transcript.json.orig.json" \
+  --after "$WORK/subtitle-transcript.json" \
+  --report "$WORK/manual-edit-review.json"
+```
+
+不要把一次性改写、删除、语气调整或标点变化手工塞进 glossary。模型无法确定时保持 ignored；已有同一错词但正确词不同则记为 conflict，不自动覆盖。
 
 ### 7. 草稿检查和烧录
 
