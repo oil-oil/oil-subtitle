@@ -17,8 +17,16 @@ def segment(start, text):
 
 class ManualGlossaryLearningTests(unittest.TestCase):
     def test_collects_text_edits_but_filters_punctuation(self):
-        before = {"segments": [segment(0, "Claude Core 很好用"), segment(2, "大家好")]}
-        after = {"segments": [segment(0, "Claude Code 很好用"), segment(2, "大家好！")]}
+        before = {"segments": [
+            segment(0, "Claude Core 很好用"),
+            segment(2, "大家好"),
+            segment(4, "一些AI实战"),
+        ]}
+        after = {"segments": [
+            segment(0, "Claude Code 很好用"),
+            segment(2, "大家好！"),
+            segment(4, "一些 AI 实战"),
+        ]}
 
         edits = LEARN.collect_manual_edits(before, after)
 
@@ -27,6 +35,8 @@ class ManualGlossaryLearningTests(unittest.TestCase):
         self.assertEqual(edits[0]["correct"], "d")
         self.assertFalse(edits[1]["eligible"])
         self.assertIn("新增或删除", edits[1]["local_reason"])
+        self.assertFalse(edits[2]["eligible"])
+        self.assertEqual(edits[2]["local_reason"], "仅修改空白")
 
     def test_model_can_select_a_contextual_safe_phrase(self):
         before = {

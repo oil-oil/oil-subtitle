@@ -93,7 +93,10 @@ def collect_manual_edits(
         wrong, correct = _minimal_change(before_text, after_text)
         eligible = True
         local_reason = "等待模型判断"
-        if not wrong or not correct:
+        if re.sub(r"\s+", "", before_text) == re.sub(r"\s+", "", after_text):
+            eligible = False
+            local_reason = "仅修改空白"
+        elif not wrong or not correct:
             eligible = False
             local_reason = "只有新增或删除，没有稳定的错词映射"
         elif _punctuation_only(wrong) or _punctuation_only(correct):
