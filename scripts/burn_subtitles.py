@@ -19,6 +19,7 @@ import tempfile
 import textwrap
 from pathlib import Path
 
+from subtitle_text import add_cjk_spacing
 from user_config import resolve_glossary_path as resolve_user_glossary_path
 from user_config import resolve_progress_enabled
 
@@ -73,13 +74,6 @@ def load_user_glossary(override: str | None = None) -> list[dict]:
 def _apply_display_replacements(text: str) -> str:
     for pattern, correct in _DISPLAY_REPLACEMENTS:
         text = pattern.sub(correct, text)
-    return text
-
-
-def add_cjk_spacing(text: str) -> str:
-    """Add spaces between CJK characters and Latin/numeric characters for readability."""
-    text = re.sub(r'([\u4e00-\u9fff\u3400-\u4dbf])([A-Za-z0-9])', r'\1 \2', text)
-    text = re.sub(r'([A-Za-z0-9])([\u4e00-\u9fff\u3400-\u4dbf])', r'\1 \2', text)
     return text
 
 

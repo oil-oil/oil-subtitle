@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from dashscope_client import call_qwen_json
+from subtitle_text import add_cjk_spacing
 from user_config import env_value, load_user_config, resolve_progress_enabled
 
 
@@ -129,7 +130,8 @@ def video_duration(path: Path | None, segments: list[dict[str, Any]]) -> float:
 
 
 def display_text(text: str) -> str:
-    return re.sub(r"\s+", " ", DISPLAY_PUNCTUATION.sub("", text)).strip()
+    normalized = re.sub(r"\s+", " ", DISPLAY_PUNCTUATION.sub("", text)).strip()
+    return add_cjk_spacing(normalized)
 
 
 def signature(payload: Any) -> str:

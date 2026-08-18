@@ -14,6 +14,13 @@ import prepare_subtitles as PREPARE  # noqa: E402
 
 
 class SubtitlePreparationTests(unittest.TestCase):
+    def test_preview_text_adds_cjk_latin_spacing_by_default(self):
+        self.assertEqual(
+            PREPARE.display_text("这是Claude Code和GPT5实战"),
+            "这是 Claude Code 和 GPT5 实战",
+        )
+        self.assertEqual(PREPARE.display_text("一些 AI 实战"), "一些 AI 实战")
+
     def test_short_chinese_video_needs_no_chapter_model_call(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
