@@ -3,7 +3,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
@@ -15,7 +14,7 @@ def segment(start, text):
     return {"start": start, "end": start + 1, "text": text}
 
 
-class ManualGlossaryLearningTests(unittest.TestCase):
+class ManualGlossaryReviewTests(unittest.TestCase):
     def test_collects_text_edits_but_filters_punctuation(self):
         before = {"segments": [
             segment(0, "Claude Core 很好用"),
@@ -34,145 +33,60 @@ class ManualGlossaryLearningTests(unittest.TestCase):
         self.assertEqual(edits[0]["wrong"], "r")
         self.assertEqual(edits[0]["correct"], "d")
         self.assertFalse(edits[1]["eligible"])
-        self.assertIn("新增或删除", edits[1]["local_reason"])
         self.assertFalse(edits[2]["eligible"])
-        self.assertEqual(edits[2]["local_reason"], "仅修改空白")
 
-    def test_model_can_select_a_contextual_safe_phrase(self):
-        before = {
-            "segments": [
-                segment(0, "我们来测试 Claude Core"),
-                segment(2, "这个功能其实还可以"),
-            ]
-        }
-        after = {
-            "segments": [
-                segment(0, "我们来测试 Claude Code"),
-                segment(2, "这个功能挺好用的"),
-            ]
-        }
-        model_result = {
-            "items": [
-                {
-                    "edit_id": 0,
-                    "decision": "learn",
-                    "wrong": "Claude Core",
-                    "correct": "Claude Code",
-                    "confidence": 0.99,
-                    "reason": "稳定的产品名误识别",
-                },
-                {
-                    "edit_id": 1,
-                    "decision": "ignore",
-                    "wrong": "其实还可以",
-                    "correct": "挺好用的",
-                    "confidence": 0.99,
-                    "reason": "一次性表达改写",
-                },
-            ]
-        }
+    def test_eligible_edit_is_pending_without_writing_glossary(self):
+        before = {"segments": [segment(0, "我们来测试 Claude Core")]}
+        after = {"segments": [segment(0, "我们来测试 Claude Code")]}
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             glossary = root / "glossary.json"
-            report = root / "manual-edit-review.json"
-            with patch.object(
-                LEARN,
-                "call_qwen_multimodal_json",
-                return_value=(model_result, {"total_tokens": 42}),
-            ):
-                result = LEARN.learn_manual_edits(
-                    before,
-                    after,
-                    report_path=report,
-                    glossary_path=glossary,
-                )
+            report_path = root / "manual-edit-review.json"
 
-            self.assertEqual(
-                json.loads(glossary.read_text(encoding="utf-8")),
-                [{"wrong": "Claude Core", "correct": "Claude Code"}],
+            result = LEARN.learn_manual_edits(
+                before,
+                after,
+                report_path=report_path,
+                glossary_path=glossary,
             )
-            self.assertEqual(len(result["learned"]), 1)
-            self.assertEqual(len(result["ignored"]), 1)
-            self.assertEqual(json.loads(report.read_text())["status"], "ok")
 
-    def test_single_latin_word_is_expanded_with_product_context(self):
-        edit = {
-            "before": "今天测试 Claude Core 这个功能",
-            "after": "今天测试 Claude Code 这个功能",
-        }
-
-        self.assertEqual(
-            LEARN._contextualize_ascii_mapping(edit, "Core", "Code"),
-            ("Claude Core", "Claude Code"),
-        )
-
-    def test_single_latin_word_without_context_is_rejected(self):
-        edit = {"before": "今天测试 Core", "after": "今天测试 Code"}
-
-        self.assertIsNone(
-            LEARN._contextualize_ascii_mapping(edit, "Core", "Code")
-        )
-
-    def test_model_failure_is_reported_without_writing_glossary(self):
-        before = {"segments": [segment(0, "白练平台")]}
-        after = {"segments": [segment(0, "百炼平台")]}
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            glossary = root / "glossary.json"
-            report = root / "report.json"
-            with patch.object(
-                LEARN,
-                "call_qwen_multimodal_json",
-                side_effect=RuntimeError("temporary model error"),
-            ):
-                result = LEARN.learn_manual_edits(
-                    before,
-                    after,
-                    report_path=report,
-                    glossary_path=glossary,
-                )
-
-            self.assertEqual(result["status"], "error")
+            self.assertEqual(result["mode"], "agent-review")
+            self.assertEqual(len(result["pending"]), 1)
+            self.assertEqual(result["learned"], [])
             self.assertFalse(glossary.exists())
-            self.assertEqual(json.loads(report.read_text())["status"], "error")
+            self.assertEqual(
+                json.loads(report_path.read_text(encoding="utf-8"))["status"],
+                "ok",
+            )
 
-    def test_existing_conflict_is_never_overwritten(self):
+    def test_existing_glossary_is_never_modified(self):
         before = {"segments": [segment(0, "白练平台")]}
         after = {"segments": [segment(0, "百炼平台")]}
-        model_result = {
-            "items": [{
-                "edit_id": 0,
-                "decision": "learn",
-                "wrong": "白练",
-                "correct": "百炼",
-                "confidence": 0.99,
-                "reason": "固定同音误识别",
-            }]
-        }
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             glossary = root / "glossary.json"
+            original = [{"wrong": "白练", "correct": "白链"}]
             glossary.write_text(
-                json.dumps([{"wrong": "白练", "correct": "白链"}], ensure_ascii=False),
+                json.dumps(original, ensure_ascii=False),
                 encoding="utf-8",
             )
-            with patch.object(
-                LEARN,
-                "call_qwen_multimodal_json",
-                return_value=(model_result, None),
-            ):
-                result = LEARN.learn_manual_edits(
-                    before,
-                    after,
-                    report_path=root / "report.json",
-                    glossary_path=glossary,
-                )
 
-            self.assertEqual(len(result["conflicts"]), 1)
-            self.assertEqual(
-                json.loads(glossary.read_text(encoding="utf-8"))[0]["correct"],
-                "白链",
+            result = LEARN.learn_manual_edits(
+                before,
+                after,
+                report_path=root / "report.json",
+                glossary_path=glossary,
             )
+
+            self.assertEqual(len(result["pending"]), 1)
+            self.assertEqual(
+                json.loads(glossary.read_text(encoding="utf-8")), original
+            )
+
+    def test_review_script_has_no_model_dependency(self):
+        source = (SCRIPT_DIR / "learn_glossary.py").read_text(encoding="utf-8")
+        self.assertNotIn("call_qwen", source)
+        self.assertNotIn("confidence_threshold", source)
 
 
 if __name__ == "__main__":

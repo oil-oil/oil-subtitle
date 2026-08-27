@@ -38,7 +38,7 @@ class ProgressLayoutTests(unittest.TestCase):
 
 
 class ManualGlossaryHookTests(unittest.TestCase):
-    def test_saving_source_subtitles_runs_glossary_learning(self):
+    def test_saving_source_subtitles_records_pending_agent_review(self):
         with tempfile.TemporaryDirectory() as tmp:
             transcript = Path(tmp) / "subtitle-transcript.json"
             transcript.write_text(
@@ -55,7 +55,8 @@ class ManualGlossaryHookTests(unittest.TestCase):
                     "learn_manual_edits",
                     return_value={
                         "status": "ok",
-                        "learned": [{"wrong": "白练", "correct": "百炼"}],
+                        "pending": [{"wrong": "白练", "correct": "百炼"}],
+                        "learned": [],
                         "ignored": [],
                         "conflicts": [],
                     },
@@ -72,7 +73,9 @@ class ManualGlossaryHookTests(unittest.TestCase):
                 PREVIEW_EDITOR.MANIFEST = old_manifest
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.get_json()["glossary_learning"]["learned_count"], 1)
+        review = response.get_json()["glossary_learning"]
+        self.assertEqual(review["pending_count"], 1)
+        self.assertEqual(review["learned_count"], 0)
         learn.assert_called_once()
 
 

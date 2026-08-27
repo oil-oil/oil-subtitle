@@ -1,5 +1,7 @@
 import importlib.util
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -15,63 +17,64 @@ SPEC.loader.exec_module(REVIEW)
 
 
 class ReviewSubtitleTests(unittest.TestCase):
-    def test_versions_are_forced_to_visual_review(self):
-        candidates = REVIEW.heuristic_visual_candidates(
+    def test_focus_list_includes_versions_commands_and_ascii_terms(self):
+        candidates = REVIEW.heuristic_review_candidates(
             [
                 {"start": 1, "end": 2, "text": "Grok 4.6 今天发布"},
-                {"start": 3, "end": 4, "text": "像 GPT-5.4 一样"},
-                {"start": 5, "end": 6, "text": "字幕错成 Grok 46"},
-                {"start": 7, "end": 8, "text": "字幕错成 GPT-54"},
+                {"start": 3, "end": 4, "text": "运行 --resume 打开 app.py"},
+                {"start": 5, "end": 6, "text": "modelreport 和 sq 需要确认"},
             ]
         )
-        self.assertEqual(
-            [item["original"] for item in candidates],
-            ["Grok 4.6", "GPT-5.4", "Grok 46", "GPT-54"],
-        )
-        self.assertTrue(all(item["decision"] == "visual" for item in candidates))
 
-    def test_commands_and_filenames_are_forced_to_visual_review(self):
-        candidates = REVIEW.heuristic_visual_candidates(
-            [{"start": 1, "end": 2, "text": "运行 --resume 打开 app.py"}]
-        )
-        self.assertEqual(
-            {item["original"] for item in candidates}, {"--resume", "app.py"}
+        originals = {item["original"] for item in candidates}
+        self.assertIn("Grok 4.6", originals)
+        self.assertIn("--resume", originals)
+        self.assertIn("app.py", originals)
+        self.assertIn("modelreport", originals)
+        self.assertIn("sq", originals)
+        self.assertTrue(
+            all(item["status"] == "needs-agent-review" for item in candidates)
         )
 
-    def test_visual_candidate_overrides_text_only_replacement(self):
-        merged = REVIEW.merge_candidates(
-            [
-                {
-                    "segment_id": 2,
-                    "original": "Grok 4.6",
-                    "suggested": "Grok 4.5",
-                    "decision": "replace",
-                    "confidence": 0.99,
-                    "reason": "模型猜测",
-                    "source": "text-model",
-                },
-                {
-                    "segment_id": 2,
-                    "original": "Grok 4.6",
-                    "suggested": "",
-                    "decision": "visual",
-                    "confidence": 0,
-                    "reason": "版本号必须看画面",
-                    "source": "rule",
-                },
+    def test_prepare_review_never_changes_subtitle_text(self):
+        payload = {
+            "segments": [
+                {"start": 0, "end": 1, "text": "Sol 不应自动改成 Sonnet"},
+                {"start": 1, "end": 2, "text": "Codex 不应自动改成 Claude"},
+                {"start": 2, "end": 3, "text": "COLLX 等待 Agent 判断"},
+                {"start": 3, "end": 4, "text": "modelreport 不应被背景 pail-ui 覆盖"},
             ]
-        )
-        self.assertEqual(merged[0]["decision"], "visual")
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            video = root / "demo.mp4"
+            source = root / "transcript.json"
+            output = root / "reviewed.json"
+            report_path = root / "report.json"
+            video.touch()
+            source.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
-    def test_safe_replace_requires_one_exact_occurrence(self):
-        self.assertEqual(
-            REVIEW.safe_replace("使用 cloud call", "cloud call", "Claude Code"),
-            ("使用 Claude Code", True),
-        )
-        self.assertEqual(
-            REVIEW.safe_replace("Grok Grok", "Grok", "Grok 4.6"),
-            ("Grok Grok", False),
-        )
+            report = REVIEW.prepare_agent_review(
+                video=video,
+                transcript=source,
+                output=output,
+                report_path=report_path,
+                frames_dir=root / "frames",
+            )
+
+            reviewed = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(
+                [item["text"] for item in reviewed["segments"]],
+                [item["text"] for item in payload["segments"]],
+            )
+            self.assertEqual(report["mode"], "agent-only")
+            self.assertEqual(report["summary"]["automatic_text_changes"], 0)
+            self.assertEqual(report["applied_or_verified"], [])
+
+    def test_review_script_has_no_qwen_correction_dependency(self):
+        source = (SCRIPT_DIR / "review_subtitles.py").read_text(encoding="utf-8")
+        self.assertNotIn("call_qwen", source)
+        self.assertNotIn("vision_suggested", source)
 
 
 if __name__ == "__main__":

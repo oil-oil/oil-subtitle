@@ -1066,7 +1066,7 @@ document.getElementById('btnSave').addEventListener('click', async () => {
 
   const saveBtn = document.getElementById('btnSave');
   saveBtn.disabled = true;
-  statusTxt.textContent = '正在保存，并判断是否加入错题本…';
+  statusTxt.textContent = '正在保存，并记录待审错词…';
 
   const res = await fetch('/api/transcript', {
     method: 'POST',
@@ -1081,12 +1081,12 @@ document.getElementById('btnSave').addEventListener('click', async () => {
   }
   const result = await res.json();
   const learning = result.glossary_learning || {};
-  const learnedCount = Number(learning.learned_count || 0);
+  const pendingCount = Number(learning.pending_count || 0);
   const learningNote = learning.status === 'error'
-    ? '，错题本判断失败，请让 Agent 重试'
-    : learnedCount > 0
-      ? `，错题本新增 ${learnedCount} 条`
-      : '，没有需要加入错题本的修改';
+    ? '，修改记录生成失败，请让 Agent 重试'
+    : pendingCount > 0
+      ? `，有 ${pendingCount} 条错词候选等待 Agent 判断`
+      : '，没有需要复用的错词候选';
 
   localStorage.removeItem(LS_KEY);
 
@@ -1207,7 +1207,7 @@ def post_transcript():
             None,
         )
         source_lang = str((source or {}).get("code") or "src")
-    learning = {"status": "skipped", "learned_count": 0}
+    learning = {"status": "skipped", "pending_count": 0}
     if not MANIFEST or lang == source_lang:
         report_path = path.parent / "manual-edit-review.json"
         try:
@@ -1218,14 +1218,15 @@ def post_transcript():
             )
             learning = {
                 "status": report["status"],
-                "learned_count": len(report["learned"]),
+                "pending_count": len(report["pending"]),
+                "learned_count": 0,
                 "ignored_count": len(report["ignored"]),
                 "conflict_count": len(report["conflicts"]),
                 "report": str(report_path),
             }
         except Exception as exc:
-            learning = {"status": "error", "learned_count": 0, "error": str(exc)}
-            print(f"[preview] glossary learning failed: {exc}", flush=True)
+            learning = {"status": "error", "pending_count": 0, "error": str(exc)}
+            print(f"[preview] manual edit review failed: {exc}", flush=True)
     RESULT_DONE.set()
     return jsonify({"ok": True, "glossary_learning": learning})
 
