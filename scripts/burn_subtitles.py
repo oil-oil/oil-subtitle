@@ -232,7 +232,7 @@ def _merge_spelled_latin_tokens(tokens: list[dict]) -> list[dict]:
 
 _SOFT_PUNCT = "，,、；;：:"
 _HARD_PUNCT = "。！？!?"
-_DISPLAY_PUNCT = _SOFT_PUNCT + _HARD_PUNCT + "…."
+_DISPLAY_PUNCT = _SOFT_PUNCT + _HARD_PUNCT + "….—–"
 
 
 def _strip_display_punctuation(text: str) -> str:

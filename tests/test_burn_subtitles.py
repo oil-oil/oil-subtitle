@@ -14,6 +14,22 @@ SPEC.loader.exec_module(BURN_SUBTITLES)
 
 
 class ReviewedSrtTests(unittest.TestCase):
+    def test_draft_strips_dashes_without_damaging_product_names_or_versions(self):
+        BURN_SUBTITLES.set_display_replacements([])
+        lines = BURN_SUBTITLES.segments_to_lines([
+            {"start": 0.0, "end": 5.0, "text": "先看——oil-html，再看–GPT-5.6。"},
+        ], max_chars=60)
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0]["text"], "先看 oil-html 再看 GPT-5.6")
+        self.assertEqual((lines[0]["start"], lines[0]["end"]), (0.0, 5.0))
+
+    def test_reviewed_srt_keeps_user_confirmed_dashes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "reviewed.srt"
+            path.write_text("1\n00:00:00,000 --> 00:00:05,000\n保留——oil-html 与 GPT-5.6\n", encoding="utf-8")
+            lines = BURN_SUBTITLES.read_srt_lines(path)
+        self.assertEqual(lines[0]["text"], "保留——oil-html 与 GPT-5.6")
+
     def test_reviewed_srt_text_is_immutable(self):
         source = """1
 00:00:00,000 --> 00:00:01,000
