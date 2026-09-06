@@ -64,6 +64,10 @@ API Key 优先读取 `DASHSCOPE_API_KEY`，否则读取 `API_KEY_FILE`。只需�
 
 ## 工作流
 
+先核对当前视频目录已有产物和本任务已经给出的确认。源视频及本阶段输入、选项未变时，从缺失阶段继续，不覆盖审校稿。同名文件不足以证明同一来源，应核对原任务记录的路径、大小、修改时间和可用指纹。
+
+已有用户定稿时只修改需要修正的位置，沿用本次章节、美颜和输出规格；只需发布或改封面时，直接交接已验证的字幕成片。
+
 ### 1. 确定视频和工作目录
 
 如果配置了 `video_library_root`，先把视频放到 `<video_library_root>/<视频标题>/`；否则保留在源视频旁边。不要覆盖同名文件。
@@ -78,6 +82,8 @@ mkdir -p "$WORK"
 ```
 
 ### 2. 转录
+
+只有没有可用转录，或源视频的内容／时间线已经改变时才转录。仅修错字、调整章节、修改封面或恢复发布，不重跑 ASR。
 
 默认路径：
 
@@ -143,20 +149,32 @@ Agent 随后通读 `reviewed-transcript.json` 的全部 segment；`candidates` �
 
 ### 5. 用户预览
 
-预览服务会阻塞，后台启动。不要杀死占用端口的未知进程；8765 被占用时改用空闲端口，例如 8766。
+用户已经要求“直接烧录”“不用审核”，或上层工作流已明确获得本次免预览授权时，完成 Agent 全文校对和 SRT 检查后直接继续，不启动预览服务、不再次确认。否则按以下方式预览。
+
+先检查当前任务已有预览服务，身份和内容匹配时复用。不要杀死占用端口的未知进程，改用空闲端口。使用宿主提供的持久进程运行器；macOS/Linux 也可用以下方式脱离命令会话启动，关闭标准输入并将日志写到工作目录：
 
 ```bash
-PREVIEW_EDITOR_PORT=8765 "$PYTHON" "$SKILL_DIR/scripts/preview_editor.py" \
-  "$WORK/subtitle-manifest.json" &
+PREVIEW_EDITOR_PORT=8765 "$PYTHON" - "$SKILL_DIR" "$WORK" <<'PY'
+import pathlib, subprocess, sys
+skill, work = (pathlib.Path(p).resolve() for p in sys.argv[1:])
+with (work / "preview-editor.log").open("a") as log:
+    process = subprocess.Popen(
+        [sys.executable, str(skill / "scripts/preview_editor.py"),
+         str(work / "subtitle-manifest.json")],
+        stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
+    )
+(work / "preview-editor.pid").write_text(str(process.pid), encoding="utf-8")
+print(process.pid)
+PY
 ```
 
-提供 `http://localhost:8765`。除非用户明确要求，不调用浏览器自动化。
+启动返回后，用另一次调用检查进程和 HTTP；核对 `/manifest` 的视频、字幕路径，以及 `/api/transcript` 的首句和条目数量，才提供实际端口的地址。失败时检查日志，不重复发送未经验证的 URL。除非用户明确要求，不调用浏览器自动化。
 
 告诉用户：
 
-> 已准备好字幕预览，请检查文字和时间是否准确。可以双击修改、取消勾选删除，确认后点击「保存并关闭」。保存时会自动判断人工修改是否需要加入个人错题本。
+> 已准备好字幕预览，请检查文字和时间是否准确。可以双击修改、取消勾选删除，确认后点击「保存并关闭」。保存会记录修改，随后由 Agent 判断哪些稳定错词适合加入个人错题本。
 
-等用户确认，或确认 `subtitle-transcript.json` 已被保存后再继续。务必核对首句属于当前视频，不能复用其他视频的 manifest。
+等用户明确确认，或取得当前预览会话成功保存的证据后继续；文件已存在不等于用户已保存。记录预览开始时的文件状态，结合保存响应／修改报告核对，不能把 Agent 准备文件的写入当成人工确认。
 
 ### 6. 审阅人工修改并维护 glossary
 
@@ -169,7 +187,7 @@ PREVIEW_EDITOR_PORT=8765 "$PYTHON" "$SKILL_DIR/scripts/preview_editor.py" \
 5. 只有安全映射才由 Agent 显式写入个人 glossary，冲突规则不得覆盖；
 6. 润色、语气调整和一次性改写保持忽略。
 
-保存后检查 `manual-edit-review.json`。如果 `status=error` 或文件缺失，先用同一脚本重试：
+保存后先检查 `manual-edit-review.json`，不要在审阅前重启编辑器，否则启动流程会覆盖修改前的副本。如果 `status=error` 或文件缺失，先用同一脚本重试：
 
 ```bash
 "$PYTHON" "$SKILL_DIR/scripts/learn_glossary.py" \
@@ -224,4 +242,4 @@ PREVIEW_EDITOR_PORT=8765 "$PYTHON" "$SKILL_DIR/scripts/preview_editor.py" \
 - 章节标题在各自时间段内保持稳定；
 - 是否启用美颜、输出路径与用户要求一致。
 
-报告最终视频、SRT、ASS 和工作目录路径，并说明需要用户重点预览的位置。
+报告最终视频、SRT、ASS 和工作目录路径，并说明需要用户重点预览的位置。修订成片时，新版通过验证后再更新后续发布包的引用，不能让发布阶段继续使用旧视频。
