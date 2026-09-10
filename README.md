@@ -4,7 +4,7 @@
   <img src="./assets/readme/hero.svg" width="100%" alt="oil-subtitle 将本地视频转换为可校对并烧录的中文字幕">
 </p>
 
-把已经导出的 MP4、MOV 交给 Agent，依次完成转录、术语纠错、人工预览、章节生成和 FFmpeg 烧录。默认只生成中文字幕，只需要一个百炼 API Key。
+为本地视频转录、校对、预览并烧录中文字幕，支持章节进度和同时间轴英文字幕。
 
 也可以将审校后的中文字幕翻译成英文 SRT，保留原有时间轴。明确只要英文字幕文件时，不启动预览、生成章节或烧录视频。
 
@@ -62,8 +62,9 @@ demo_subtitled.mp4
 SKILL_DIR="/absolute/path/to/oil-subtitle"
 
 bash "$SKILL_DIR/setup.sh"
-"$SKILL_DIR/.venv/bin/python3" \
-  "$SKILL_DIR/scripts/configure_api_key.py"
+node "$SKILL_DIR/scripts/credential-ui/src/profile.ts" status default
+# 缺少凭据时，由用户在页面亲自填写：
+node "$SKILL_DIR/scripts/credential-ui/src/profile.ts" setup default
 ```
 
 配置完成后，把视频路径和目标告诉 Agent：
@@ -78,9 +79,9 @@ Agent 的完整执行规范见 [SKILL.md](SKILL.md)。
 
 ## API Key 只需配置一次
 
-FunAudio ASR、Qwen 字幕断句、章节生成和 hotwords 共用同一个百炼 API Key，全部通过 DashScope Python SDK 调用，不需要安装百炼 CLI、Node.js，也不依赖 ZenMux。
+FunAudio ASR、Qwen 字幕断句、章节生成和 hotwords 共用同一个百炼 API Key，全部通过 DashScope Python SDK 调用，业务程序不需要额外 CLI；本机配置页需要 Node.js 22.18+。
 
-新凭据保存在系统凭据库，普通配置 `~/.config/oil-subtitle/config.json` 只保存引用。终端隐藏输入，不要把密钥发到聊天。读取顺序为运行时 `DASHSCOPE_API_KEY`、系统凭据、旧密钥文件、旧百炼配置。
+新凭据保存在系统凭据库，普通配置 `~/.config/oil-subtitle/config.json` 只保存引用。默认在本机配置页亲自填写，再按配置说明通过 run 入口运行业务；不要把密钥发到聊天。读取顺序为运行时 `DASHSCOPE_API_KEY`、系统凭据、旧密钥文件、旧百炼配置。
 
 安装脚本不会自动迁移凭据。需要迁移时运行配置脚本并添加 `--migrate-existing`；旧文件保留，迁移后可由用户自行清理。系统凭据库不可用时直接失败，不改用明文文件。
 
@@ -176,7 +177,8 @@ mkdir -p "$WORK"
 
 | 脚本 | 作用 |
 | --- | --- |
-| `scripts/configure_api_key.py` | 一次性保存或迁移百炼 API Key |
+| `scripts/credential-ui/src/profile.ts` | 默认配置页面、状态检查与业务凭据注入 |
+| `scripts/configure_api_key.py` | 用户主动选择的终端配置与旧凭据迁移 |
 | `scripts/bailian_transcribe.py` | FunAudio ASR、hotwords、glossary 和字幕分行 |
 | `scripts/review_subtitles.py` | 原样复制转录稿并生成 Agent 技术词聚焦清单，不自动改词 |
 | `scripts/local_transcribe.py` | 本地 Whisper 降级转录 |
@@ -190,3 +192,9 @@ mkdir -p "$WORK"
 ```bash
 ./.venv/bin/python3 -m unittest discover -s tests
 ```
+
+## API Key 配置页面
+
+首次使用外部服务时，可以在本机配置页亲自填写 Key；已有配置会复用，密钥存入系统凭据库。只为实际使用的外部服务配置；纯本地处理不需要 Key。页面需要 Node.js 22.18+ 与可用的系统凭据服务，业务运行仍使用原依赖。
+
+安装、状态检查、打开页面和带凭据运行的完整入口见[配置说明](references/api-key-setup.md)。页面保存与业务读取已经接通；不把 Key 发进聊天，也不自动迁移旧文件。

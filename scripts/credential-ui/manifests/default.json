@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "id": "oil-subtitle",
+  "label": "语音识别与字幕处理 API Key",
+  "credential": "oil-subtitle/dashscope/default",
+  "ui": {
+    "title": "配置服务",
+    "placeholder": "粘贴该服务的 API Key",
+    "saveLabel": "保存"
+  }
+}

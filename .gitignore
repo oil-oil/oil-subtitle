@@ -4,3 +4,4 @@ __pycache__/
 *.pyo
 .vocabulary-cache.json
 glossary.json
+node_modules/

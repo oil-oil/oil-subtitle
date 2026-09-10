@@ -13,6 +13,10 @@ description: >
 
 脚本负责 ASR、术语表、分行、疑点检测、章节、排版、人脸区域检测和 FFmpeg 烧录。Agent 是字幕正文唯一的语义校对者，负责通读转录稿、结合音频和必要画面修正错词、组织用户预览并检查最终结果。百炼模型不得自动改写字幕正文。
 
+## API Key 配置入口
+
+需要外部服务凭据时先读[API Key 配置与业务读取](references/api-key-setup.md)：复用已有安全入口；本机缺少 Key 时使用随附固定页面，保存后通过业务包装入口读取。内置能力与纯本地流程不要求配置 Key。
+
 ## 默认行为
 
 - 默认只生成中文字幕。用户明确要求英文字幕时，才从审校后的中文字幕逐条翻译；不把英文翻译混入默认转录和烧录流程。默认使用 DashScope Python SDK 调用百炼 FunAudio ASR；字幕断句和长视频章节由百炼 Qwen 完成，全部共用一个 API Key。旧本地 Whisper 仅用于明确比较或远程服务不可用时的降级。
@@ -38,10 +42,12 @@ CONFIG="${OIL_SUBTITLE_CONFIG:-$HOME/.config/oil-subtitle/config.json}"
 
 ```bash
 bash "$SKILL_DIR/setup.sh"
-"$PYTHON" "$SKILL_DIR/scripts/configure_api_key.py"
+node "$SKILL_DIR/scripts/credential-ui/src/profile.ts" status default
+# 仅缺少凭据或用户要求更换时执行：
+node "$SKILL_DIR/scripts/credential-ui/src/profile.ts" setup default
 ```
 
-API Key 优先读取运行时环境变量，然后读取系统凭据库；旧密钥文件和百炼配置仅作兼容读取。配置脚本通过终端隐藏输入收集密钥，普通 JSON 只保存 `credential_ref`。安装不迁移凭据；用户明确要求迁移时添加 `--migrate-existing`，旧文件保留供用户自行处理。系统后端不可用则报告失败，不退回明文存储。首次执行 `setup.sh` 前说明它会安装 Python 依赖，缺少 FFmpeg 时还会尝试通过 Homebrew 安装。
+API Key 优先读取运行时环境变量，然后读取系统凭据库；旧密钥文件和百炼配置仅作兼容读取。默认使用随附本机配置页；页面保存后，云端转录、断句、章节和翻译程序经 run 入口读取，普通 JSON 只保存引用。原 `configure_api_key.py` 仅保留给用户主动选择的终端配置或迁移方式。安装不迁移凭据；用户明确要求迁移时添加 `--migrate-existing`，旧文件保留供用户自行处理。系统后端不可用则报告失败，不退回明文存储。首次执行 `setup.sh` 前说明它会安装 Python 依赖，缺少 FFmpeg 时还会尝试通过 Homebrew 安装。
 
 可选配置：
 
@@ -90,7 +96,7 @@ mkdir -p "$WORK"
 默认路径：
 
 ```bash
-"$PYTHON" "$SKILL_DIR/scripts/bailian_transcribe.py" \
+node "$SKILL_DIR/scripts/credential-ui/src/profile.ts" run default -- "$PYTHON" "$SKILL_DIR/scripts/bailian_transcribe.py" \
   "$VIDEO" \
   --output "$WORK/transcript.json" \
   --raw-output "$WORK/bailian_asr.json" \
@@ -135,7 +141,7 @@ Agent 随后通读 `reviewed-transcript.json` 的全部 segment；`candidates` �
 ### 4. 准备字幕和章节
 
 ```bash
-"$PYTHON" "$SKILL_DIR/scripts/prepare_subtitles.py" \
+node "$SKILL_DIR/scripts/credential-ui/src/profile.ts" run default -- "$PYTHON" "$SKILL_DIR/scripts/prepare_subtitles.py" \
   --transcript "$WORK/reviewed-transcript.json" \
   --video "$VIDEO" \
   --output "$WORK/subtitle-transcript.json" \

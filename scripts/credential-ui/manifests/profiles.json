@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "profiles": {
+    "default": [
+      {
+        "manifest": "default.json",
+        "env": "DASHSCOPE_API_KEY"
+      }
+    ]
+  }
+}
