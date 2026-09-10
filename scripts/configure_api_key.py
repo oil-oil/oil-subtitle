@@ -13,6 +13,8 @@ from user_config import (
     dashscope_api_key_file,
     legacy_bailian_api_key,
     save_dashscope_api_key,
+    load_user_config,
+    load_dashscope_api_key,
 )
 
 
@@ -21,21 +23,25 @@ def main() -> int:
     parser.add_argument(
         "--migrate-existing",
         action="store_true",
-        help="Import an existing Bailian CLI credential when available",
+        help="明确迁移旧 API Key 文件或 Bailian 配置；不删除旧文件",
     )
     args = parser.parse_args()
 
+    if load_user_config().get('credential_ref') and load_dashscope_api_key(required=False):
+        print('DashScope API key is configured in the system credential store.')
+        return 0
+
     target = dashscope_api_key_file()
-    if target.exists() and target.read_text(encoding="utf-8").strip():
+    if not args.migrate_existing and target.exists() and target.read_text(encoding="utf-8").strip():
         target.chmod(0o600)
         print(f"DashScope API key is already configured: {target}")
         return 0
 
     if args.migrate_existing:
-        legacy_key = legacy_bailian_api_key()
+        legacy_key = target.read_text(encoding="utf-8").strip() if target.exists() else legacy_bailian_api_key()
         if legacy_key:
             saved = save_dashscope_api_key(legacy_key, target)
-            print(f"Migrated the existing Bailian credential to: {saved}")
+            print(f"旧凭据已迁移到系统凭据库；普通配置引用位置（旧文件保留）： {saved}")
             return 0
 
     if os.environ.get("DASHSCOPE_API_KEY", "").strip():
@@ -46,9 +52,9 @@ def main() -> int:
         print(
             "DashScope API key is not configured. Run:\n"
             f"  .venv/bin/python3 scripts/configure_api_key.py\n"
-            f"The key will be stored at {PREFERRED_API_KEY_FILE} with mode 600."
+            "The key will be stored in the system credential store."
         )
-        return 0
+        return 2
 
 
     key = getpass.getpass("DashScope API Key: ").strip()

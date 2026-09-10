@@ -32,7 +32,6 @@ description: >
 SKILL_DIR="<oil-subtitle 的绝对目录>"
 PYTHON="$SKILL_DIR/.venv/bin/python3"
 CONFIG="${OIL_SUBTITLE_CONFIG:-$HOME/.config/oil-subtitle/config.json}"
-API_KEY_FILE="${OIL_SUBTITLE_API_KEY_FILE:-$HOME/.config/oil-subtitle/dashscope_api_key}"
 ```
 
 首次使用时运行：
@@ -42,7 +41,7 @@ bash "$SKILL_DIR/setup.sh"
 "$PYTHON" "$SKILL_DIR/scripts/configure_api_key.py"
 ```
 
-API Key 优先读取 `DASHSCOPE_API_KEY`，否则读取 `API_KEY_FILE`。只需配置一次；文件权限固定为 `600`，不得提交到仓库。已有 `~/.bailian/config.json` 会在初始化时自动迁移。
+API Key 优先读取运行时环境变量，然后读取系统凭据库；旧密钥文件和百炼配置仅作兼容读取。配置脚本通过终端隐藏输入收集密钥，普通 JSON 只保存 `credential_ref`。安装不迁移凭据；用户明确要求迁移时添加 `--migrate-existing`，旧文件保留供用户自行处理。系统后端不可用则报告失败，不退回明文存储。首次执行 `setup.sh` 前说明它会安装 Python 依赖，缺少 FFmpeg 时还会尝试通过 Homebrew 安装。
 
 可选配置：
 

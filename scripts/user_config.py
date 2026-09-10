@@ -5,8 +5,12 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
+import secure_credentials
+
+CREDENTIAL_REF = 'oil-subtitle/dashscope/default'
 
 
 PREFERRED_CONFIG = Path.home() / ".config" / "oil-subtitle" / "config.json"
@@ -123,6 +127,8 @@ def legacy_bailian_api_key() -> str:
 
 def load_dashscope_api_key(*, required: bool = True) -> str:
     key = env_value("DASHSCOPE_API_KEY")
+    if not key and load_user_config().get('credential_ref'):
+        key = secure_credentials.read(load_user_config()['credential_ref'])
     if not key:
         key = _read_secret(dashscope_api_key_file())
     if not key:
@@ -139,12 +145,21 @@ def save_dashscope_api_key(key: str, path: Path | None = None) -> Path:
     key = str(key or "").strip()
     if not key:
         raise ValueError("DashScope API key must not be empty")
-    target = (path or dashscope_api_key_file()).expanduser()
+    # path 只保留为旧调用签名，不再写入密钥文件。
+    target = Path(os.environ.get('OIL_SUBTITLE_CONFIG') or PREFERRED_CONFIG).expanduser()
+    config = json.loads(target.read_text(encoding='utf-8')) if target.exists() else {}
+    if not isinstance(config, dict):
+        raise RuntimeError('oil-subtitle 配置必须是 JSON 对象；原凭据未修改')
+    secure_credentials.save(CREDENTIAL_REF, key)
+    config['credential_ref'] = CREDENTIAL_REF
     target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     target.parent.chmod(0o700)
-    temporary = target.with_name(f".{target.name}.tmp")
-    temporary.write_text(key + "\n", encoding="utf-8")
-    temporary.chmod(0o600)
-    temporary.replace(target)
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=target.parent, prefix=f".{target.name}.", delete=False) as stream:
+        temporary = Path(stream.name)
+        stream.write(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
+    try:
+        temporary.replace(target)
+    finally:
+        temporary.unlink(missing_ok=True)
     target.chmod(0o600)
     return target

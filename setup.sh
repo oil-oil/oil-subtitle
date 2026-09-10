@@ -24,7 +24,7 @@ if [[ ! -d ".venv" ]]; then
 fi
 
 .venv/bin/pip install --quiet --upgrade pip
-.venv/bin/pip install --quiet flask jieba 'dashscope>=1.26.7,<2'
+.venv/bin/pip install --quiet flask jieba 'dashscope>=1.26.7,<2' -r scripts/requirements-credentials.txt
 
 if [[ "$(uname -m)" == "arm64" ]]; then
     .venv/bin/pip install --quiet mlx-whisper
@@ -35,6 +35,5 @@ else
 fi
 
 "$SKILL_DIR/.venv/bin/python3" -c "import dashscope, flask, jieba"
-"$SKILL_DIR/.venv/bin/python3" \
-    "$SKILL_DIR/scripts/configure_api_key.py" --migrate-existing
+# 凭据配置与安装分开，避免安装时自动迁移旧凭据。
 echo "oil-subtitle setup complete."

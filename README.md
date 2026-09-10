@@ -80,19 +80,9 @@ Agent 的完整执行规范见 [SKILL.md](SKILL.md)。
 
 FunAudio ASR、Qwen 字幕断句、章节生成和 hotwords 共用同一个百炼 API Key，全部通过 DashScope Python SDK 调用，不需要安装百炼 CLI、Node.js，也不依赖 ZenMux。
 
-默认保存位置：
+新凭据保存在系统凭据库，普通配置 `~/.config/oil-subtitle/config.json` 只保存引用。终端隐藏输入，不要把密钥发到聊天。读取顺序为运行时 `DASHSCOPE_API_KEY`、系统凭据、旧密钥文件、旧百炼配置。
 
-```text
-~/.config/oil-subtitle/dashscope_api_key
-```
-
-文件权限固定为 `600`。后续运行会自动读取，无需重复输入。读取优先级为：
-
-1. 当前环境中的 `DASHSCOPE_API_KEY`；
-2. 本地 API Key 文件；
-3. 旧的 `~/.bailian/config.json`。
-
-如果以前执行过 `bl auth login`，`setup.sh` 会尝试把旧凭据迁移到新位置。
+安装脚本不会自动迁移凭据。需要迁移时运行配置脚本并添加 `--migrate-existing`；旧文件保留，迁移后可由用户自行清理。系统凭据库不可用时直接失败，不改用明文文件。
 
 ## 维护 hotwords 与 glossary
 

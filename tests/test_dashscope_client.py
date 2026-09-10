@@ -169,15 +169,20 @@ class ApiKeyConfigTests(unittest.TestCase):
                 {
                     "DASHSCOPE_API_KEY": "",
                     "OIL_SUBTITLE_API_KEY_FILE": str(target),
+                    "OIL_SUBTITLE_CONFIG": str(Path(tmp) / "config.json"),
                 },
                 clear=False,
-            ), patch.object(USER_CONFIG, "legacy_bailian_api_key", return_value=""):
+            ), patch.object(USER_CONFIG, "legacy_bailian_api_key", return_value=""), patch.object(USER_CONFIG.secure_credentials, "save") as save, patch.object(USER_CONFIG.secure_credentials, "read", return_value="secret-value"):
+
                 saved = USER_CONFIG.save_dashscope_api_key("secret-value")
                 loaded = USER_CONFIG.load_dashscope_api_key()
 
-            self.assertEqual(saved, target)
+            self.assertEqual(saved, Path(tmp) / "config.json")
+            save.assert_called_once_with(USER_CONFIG.CREDENTIAL_REF, "secret-value")
+            self.assertFalse(target.exists())
+            self.assertNotIn("secret-value", saved.read_text())
             self.assertEqual(loaded, "secret-value")
-            self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
+            self.assertEqual(stat.S_IMODE(saved.stat().st_mode), 0o600)
 
     def test_environment_key_has_highest_priority(self):
         with patch.dict(
