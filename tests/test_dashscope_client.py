@@ -184,6 +184,32 @@ class ApiKeyConfigTests(unittest.TestCase):
             self.assertEqual(loaded, "secret-value")
             self.assertEqual(stat.S_IMODE(saved.stat().st_mode), 0o600)
 
+    def test_legacy_plaintext_requires_explicit_opt_in(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "dashscope_api_key"
+            target.write_text("legacy-value\n", encoding="utf-8")
+            base = {
+                "DASHSCOPE_API_KEY": "",
+                "OIL_SUBTITLE_API_KEY_FILE": str(target),
+                "OIL_SUBTITLE_CONFIG": str(Path(tmp) / "config.json"),
+            }
+            with patch.dict(
+                os.environ,
+                {**base, "OIL_SUBTITLE_ALLOW_LEGACY_PLAINTEXT": "0"},
+                clear=False,
+            ), patch.object(USER_CONFIG, "legacy_bailian_api_key", return_value=""):
+                with self.assertRaisesRegex(RuntimeError, "not configured"):
+                    USER_CONFIG.load_dashscope_api_key()
+
+            with patch.dict(
+                os.environ,
+                {**base, "OIL_SUBTITLE_ALLOW_LEGACY_PLAINTEXT": "1"},
+                clear=False,
+            ), patch.object(USER_CONFIG, "legacy_bailian_api_key", return_value=""):
+                self.assertEqual(
+                    USER_CONFIG.load_dashscope_api_key(), "legacy-value"
+                )
+
     def test_environment_key_has_highest_priority(self):
         with patch.dict(
             os.environ, {"DASHSCOPE_API_KEY": "environment-key"}, clear=False

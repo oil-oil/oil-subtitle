@@ -265,7 +265,8 @@ def _clean_filler_text(text: str) -> str:
 
 def _strip_display_punctuation(text: str) -> str:
     """Remove punctuation used for timing but not wanted in visible subtitles."""
-    return re.sub(rf"[{re.escape(DISPLAY_PUNCT)}]", "", text)
+    text = re.sub(rf"[{re.escape(DISPLAY_PUNCT.replace('.', ''))}]", "", text)
+    return re.sub(r"(?<!\d)\.|\.(?!\d)", "", text)
 
 
 def _clean_display_text(text: str) -> str:

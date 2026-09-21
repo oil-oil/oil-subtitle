@@ -14,6 +14,18 @@ SPEC.loader.exec_module(BURN_SUBTITLES)
 
 
 class ReviewedSrtTests(unittest.TestCase):
+    def test_burn_refuses_existing_output_without_overwrite(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / "output.mp4"
+            output.write_bytes(b"existing")
+            with self.assertRaisesRegex(FileExistsError, "already exists"):
+                BURN_SUBTITLES.burn_subtitles(
+                    root / "input.mp4",
+                    root / "subtitles.ass",
+                    output,
+                )
+
     def test_draft_strips_dashes_without_damaging_product_names_or_versions(self):
         BURN_SUBTITLES.set_display_replacements([])
         lines = BURN_SUBTITLES.segments_to_lines([

@@ -238,7 +238,7 @@ _DISPLAY_PUNCT = _SOFT_PUNCT + _HARD_PUNCT + "….—–"
 def _strip_display_punctuation(text: str) -> str:
     """Remove punctuation that should guide timing but should not be burned in."""
     text = re.sub(rf"[{re.escape(_DISPLAY_PUNCT.replace('.', ''))}]", "", text)
-    return re.sub(r"(?<!\d)\.(?!\d)", "", text)
+    return re.sub(r"(?<!\d)\.|\.(?!\d)", "", text)
 
 
 def _tokens_text(tokens: list[dict]) -> str:
@@ -1163,7 +1163,8 @@ def burn_subtitles(video_path: Path, ass_path: Path, output_path: Path,
                    encoder: str = "x264",
                    video_size: tuple[int, int] | None = None,
                    camera_region: tuple[int, int, int, int] | None = None,
-                   progress_overlay_height: int = 0):
+                   progress_overlay_height: int = 0,
+                   overwrite: bool = False):
     """Burn ASS subtitles into video using ffmpeg.
 
     scale_to: (width, height) to scale before rendering subtitles.
@@ -1173,6 +1174,8 @@ def burn_subtitles(video_path: Path, ass_path: Path, output_path: Path,
     corrects the frame orientation AND clears the Display Matrix in the output, so no manual
     transpose filter or metadata patching is needed.
     """
+    if output_path.exists() and not overwrite:
+        raise FileExistsError(f"Output already exists: {output_path}. Use --overwrite after explicit approval.")
     log(f"Burning subtitles into video...")
 
     # Escape special chars in path for ffmpeg filter
@@ -1299,6 +1302,8 @@ def main():
     parser.add_argument("--transcript", default=None, help="Path to transcript.json from local_transcribe.py or another ASR")
     parser.add_argument("--srt-input", default=None, help="Burn a reviewed SRT directly without re-laying out transcript text")
     parser.add_argument("--output", default=None, help="Output video path (default: input_subtitled.mp4)")
+    parser.add_argument("--overwrite", action="store_true",
+                        help="允许在用户明确同意后覆盖已有 MP4/ASS/SRT 产物")
     parser.add_argument("--glossary", default=None,
                         help="Glossary JSON path; overrides environment and user config")
     parser.add_argument(
@@ -1368,6 +1373,19 @@ def main():
     else:
         output_path = video_path.with_name(video_path.stem + "_subtitled.mp4")
     ass_path = output_path.with_suffix(".ass")
+
+    if output_path.resolve() == video_path.resolve():
+        print("❌ Output path must differ from the input video")
+        sys.exit(1)
+    protected_paths = [output_path, ass_path]
+    if args.draft_output:
+        protected_paths.append(Path(args.draft_output))
+    if not args.overwrite:
+        existing = [str(path) for path in protected_paths if path.exists()]
+        if existing:
+            print("❌ Refusing to overwrite existing output: " + ", ".join(existing))
+            print("   Re-run with --overwrite only after explicit user approval.")
+            sys.exit(1)
 
     glossary = load_user_glossary(args.glossary) if not srt_input_path else []
     if glossary:
@@ -1534,7 +1552,8 @@ def main():
                    encoder=args.encoder,
                    video_size=(video_w, video_h),
                    camera_region=camera_region,
-                   progress_overlay_height=progress_overlay_height)
+                   progress_overlay_height=progress_overlay_height,
+                   overwrite=args.overwrite)
 
     log("")
     log("=" * 50)

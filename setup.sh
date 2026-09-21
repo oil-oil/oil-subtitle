@@ -35,5 +35,14 @@ else
 fi
 
 "$SKILL_DIR/.venv/bin/python3" -c "import dashscope, flask, jieba"
+if ! command -v node &>/dev/null || ! command -v npm &>/dev/null; then
+    echo "ERROR: credential-ui 需要 Node.js 22.18+ 和 npm。"
+    exit 1
+fi
+if ! node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 18) ? 0 : 1)'; then
+    echo "ERROR: credential-ui 需要 Node.js 22.18+。当前版本：$(node --version)"
+    exit 1
+fi
+npm --prefix "$SKILL_DIR/scripts/credential-ui" ci --quiet --ignore-scripts
 # 凭据配置与安装分开，避免安装时自动迁移旧凭据。
 echo "oil-subtitle setup complete."

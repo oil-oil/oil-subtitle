@@ -12,6 +12,15 @@ async function fixture() {
   await Promise.all(files.map((file, i) => writeFile(file, JSON.stringify({ version: 1, id: 'sample-skill', label: '服务', credential: 'sample/key-' + i }))));
   return { dir, files, cleanup: () => rm(dir, { recursive: true, force: true }) };
 }
+test('可信环境变量优先，不读取系统凭据库', async t => {
+  const f = await fixture(); t.after(f.cleanup);
+  const plan = await prepareCommand(
+    ['--manifest', f.files[0], '--env', 'FIRST_API_KEY', '--', 'unused'],
+    async () => { throw Error('不应读取凭据库'); },
+    { FIRST_API_KEY: 'ENV_VALUE' },
+  );
+  assert.equal(plan.env.FIRST_API_KEY, 'ENV_VALUE');
+});
 test('多个 key 同时注入一个真实子进程，命令参数不包含值', async t => {
   const f = await fixture(); t.after(f.cleanup);
   const plan = await prepareCommand(['--manifest', f.files[0], '--env', 'FIRST_API_KEY', '--manifest', f.files[1], '--env', 'SECOND_API_KEY', '--',

@@ -36,9 +36,11 @@ export async function prepareCommand(
   const env = { ...baseEnv };
   try {
     for (let i = 0; i < plan.bindings.length; i++) {
-      const value = await readCredential(manifests[i].credential);
+      const variable = plan.bindings[i].variable;
+      const existing = env[variable]?.trim();
+      const value = existing || await readCredential(manifests[i].credential);
       if (!value) throw new PublicError('有凭据尚未配置，任务未启动。');
-      env[plan.bindings[i].variable] = value;
+      env[variable] = value;
     }
     return { ...plan, env };
   } catch (error) {

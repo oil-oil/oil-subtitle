@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resolve oil-subtitle settings with backward-compatible legacy fallbacks."""
+"""解析 oil-subtitle 设置和由可信运行环境提供的 API Key。"""
 
 from __future__ import annotations
 
@@ -127,16 +127,17 @@ def legacy_bailian_api_key() -> str:
 
 def load_dashscope_api_key(*, required: bool = True) -> str:
     key = env_value("DASHSCOPE_API_KEY")
-    if not key and load_user_config().get('credential_ref'):
-        key = secure_credentials.read(load_user_config()['credential_ref'])
     if not key:
-        key = _read_secret(dashscope_api_key_file())
-    if not key:
-        key = legacy_bailian_api_key()
+        config = load_user_config()
+        if config.get("credential_ref"):
+            key = secure_credentials.read(config["credential_ref"])
+        if not key and os.environ.get("OIL_SUBTITLE_ALLOW_LEGACY_PLAINTEXT") == "1":
+            key = _read_secret(dashscope_api_key_file()) or legacy_bailian_api_key()
     if not key and required:
         raise RuntimeError(
             "DashScope API key is not configured. Run "
-            "`.venv/bin/python3 scripts/configure_api_key.py`."
+            "`scripts/configure_api_key.py`, then run the cloud command through "
+            "the credential-ui profile wrapper."
         )
     return key
 

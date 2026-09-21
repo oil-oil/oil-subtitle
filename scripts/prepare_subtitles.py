@@ -20,7 +20,7 @@ from user_config import env_value, load_user_config, resolve_progress_enabled
 DEFAULT_MODEL = "qwen-plus"
 CHAPTER_PLANNING_VERSION = 3
 DEFAULT_PROGRESS_MIN_DURATION = 180.0
-DISPLAY_PUNCTUATION = re.compile(r"[，。！？；：、,.!?;:…]+")
+DISPLAY_PUNCTUATION = re.compile(r"[，。！？；：、,!?;:…]+|(?<!\d)\.|\.(?!\d)")
 
 
 def fail(message: str) -> None:

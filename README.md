@@ -81,9 +81,9 @@ Agent 的完整执行规范见 [SKILL.md](SKILL.md)。
 
 FunAudio ASR、Qwen 字幕断句、章节生成和 hotwords 共用同一个百炼 API Key，全部通过 DashScope Python SDK 调用，业务程序不需要额外 CLI；本机配置页需要 Node.js 22.18+。
 
-新凭据保存在系统凭据库，普通配置 `~/.config/oil-subtitle/config.json` 只保存引用。默认在本机配置页亲自填写，再按配置说明通过 run 入口运行业务；不要把密钥发到聊天。读取顺序为运行时 `DASHSCOPE_API_KEY`、系统凭据、旧密钥文件、旧百炼配置。
+新凭据保存在系统凭据库，普通配置 `~/.config/oil-subtitle/config.json` 只保存引用。默认在本机配置页亲自填写，再按配置说明通过 run 入口运行业务；不要把密钥发到聊天。读取顺序为运行时 `DASHSCOPE_API_KEY`、系统凭据；旧密钥文件和旧百炼配置只有设置 `OIL_SUBTITLE_ALLOW_LEGACY_PLAINTEXT=1` 时才读取。
 
-安装脚本不会自动迁移凭据。需要迁移时运行配置脚本并添加 `--migrate-existing`；旧文件保留，迁移后可由用户自行清理。系统凭据库不可用时直接失败，不改用明文文件。
+安装脚本不会自动迁移凭据，`configure_api_key.py` 也不会接受密钥或执行迁移。系统凭据库不可用时直接失败，不改用明文文件。
 
 ## 维护 hotwords 与 glossary
 
@@ -131,8 +131,9 @@ SKILL_DIR="/absolute/path/to/oil-subtitle"
 VIDEO="/path/to/demo.mp4"
 WORK="/path/to/demo.subtitle-work"
 mkdir -p "$WORK"
+RUN_CLOUD=(node "$SKILL_DIR/scripts/credential-ui/src/profile.ts" run default --)
 
-"$SKILL_DIR/.venv/bin/python3" "$SKILL_DIR/scripts/bailian_transcribe.py" \
+"${RUN_CLOUD[@]}" "$SKILL_DIR/.venv/bin/python3" "$SKILL_DIR/scripts/bailian_transcribe.py" \
   "$VIDEO" \
   --output "$WORK/transcript.json" \
   --raw-output "$WORK/bailian_asr.json" \
@@ -145,7 +146,7 @@ mkdir -p "$WORK"
   --report "$WORK/subtitle-review.json" \
   --frames-dir "$WORK/review-frames"
 
-"$SKILL_DIR/.venv/bin/python3" "$SKILL_DIR/scripts/prepare_subtitles.py" \
+"${RUN_CLOUD[@]}" "$SKILL_DIR/.venv/bin/python3" "$SKILL_DIR/scripts/prepare_subtitles.py" \
   --transcript "$WORK/reviewed-transcript.json" \
   --video "$VIDEO" \
   --output "$WORK/subtitle-transcript.json" \
@@ -178,14 +179,14 @@ mkdir -p "$WORK"
 | 脚本 | 作用 |
 | --- | --- |
 | `scripts/credential-ui/src/profile.ts` | 默认配置页面、状态检查与业务凭据注入 |
-| `scripts/configure_api_key.py` | 用户主动选择的终端配置与旧凭据迁移 |
+| `scripts/configure_api_key.py` | 启动或检查随附的系统凭据页 |
 | `scripts/bailian_transcribe.py` | FunAudio ASR、hotwords、glossary 和字幕分行 |
 | `scripts/review_subtitles.py` | 原样复制转录稿并生成 Agent 技术词聚焦清单，不自动改词 |
 | `scripts/local_transcribe.py` | 本地 Whisper 降级转录 |
 | `scripts/prepare_subtitles.py` | 准备中文字幕、章节和预览 manifest |
 | `scripts/preview_editor.py` | 启动本地字幕预览编辑器 |
 | `scripts/learn_glossary.py` | 从人工修改中生成待 Agent 审阅的错词报告，不自动写词库 |
-| `scripts/burn_subtitles.py` | 生成 SRT/ASS 并烧录 MP4 |
+| `scripts/burn_subtitles.py` | 生成 SRT/ASS 并烧录 MP4；默认拒绝覆盖 |
 
 ## 测试
 
